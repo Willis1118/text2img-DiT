@@ -93,6 +93,13 @@ class LabelEmbedder(nn.Module):
         embeddings = self.embedding_table(labels)
         return embeddings
 
+################################## Add Text Embeddings Here ##################################
+class TextEmbedder(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, text):
+        return text
 
 #################################################################################
 #                                 Core DiT Model                                #
@@ -116,6 +123,9 @@ class DiTBlock(nn.Module):
         )
 
     def forward(self, x, c):
+
+        # sample out conditions 
+        # _msa is for Multihead self-attention, _mlp is for pointwise feedforward
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
         x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
         x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
@@ -237,10 +247,14 @@ class DiT(nn.Module):
         t: (N,) tensor of diffusion timesteps
         y: (N,) tensor of class labels
         """
+        # --> patchify images and add positional embedding
         x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
         t = self.t_embedder(t)                   # (N, D)
         y = self.y_embedder(y, self.training)    # (N, D)
+
+        ########### Add text conditioning here ##########
         c = t + y                                # (N, D)
+
         for block in self.blocks:
             x = block(x, c)                      # (N, T, D)
         x = self.final_layer(x, c)                # (N, T, patch_size ** 2 * out_channels)

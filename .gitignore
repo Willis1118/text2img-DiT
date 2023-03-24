@@ -1,0 +1,6 @@
+__pycache__
+results
+pretrained_models
+*.sbatch
+*.out
+*.png

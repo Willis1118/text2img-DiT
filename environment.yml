@@ -3,6 +3,7 @@ channels:
   - pytorch
   - nvidia
 dependencies:
+  - pip 
   - python >= 3.8
   - pytorch >= 1.13
   - torchvision
