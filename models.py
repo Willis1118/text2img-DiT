@@ -93,13 +93,48 @@ class LabelEmbedder(nn.Module):
         embeddings = self.embedding_table(labels)
         return embeddings
 
-################################## Add Text Embeddings Here ##################################
 class TextEmbedder(nn.Module):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, hidden_size, text_channel_size, encoder_config):
+        '''
+            Defines a Text embedder based on DistilBert
+            Inputs:
+                - [N, D] shaped vector of padded captions; length D for each element in the batch
+            Outputs:
+                - [N, hidden_size] shaped text embeddings
+        '''
 
-    def forward(self, text):
-        return text
+        super().__init__()
+        
+        self.text_emb_size = text_channel_size * 768
+        self.encoder = DistilBertModel.from_pretrained(encoder_config)
+
+        if encoder_config == "distilbert-base-uncased":
+            self.end_token = 102
+
+        self.mlp = nn.Sequential(
+            nn.Linear(self.text_emb_size, hidden_size, bias=True),
+            nn.SiLU(),
+            nn.Linear(hidden_size, hidden_size, bias=True)
+        )
+    
+    @staticmethod
+    def encoding(caption, encoder, end_token):
+
+        mask = torch.cumsum((cap == end_token), 1)
+        mask[cap == end_token] = 0
+        mask = (~mask.bool()).long()
+
+        with torch.no_grad():
+            emb = encoder(caption, attention_mask=mask)['last_hidden_state']
+        
+        emb = rearrange(emb, 'b c h -> b (c h)')
+        return emb
+
+    def forward(self, x):
+        x_emb = self.encoding(x, self.encoder, self.end_token)
+        x_mlp = self.mlp(x_emb)
+
+        return x_mlp
 
 #################################################################################
 #                                 Core DiT Model                                #
