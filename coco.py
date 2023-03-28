@@ -15,6 +15,8 @@ from transformers import DistilBertTokenizerFast, DistilBertModel
 from tqdm import tqdm
 from einops import rearrange
 
+from models import TextEmbedder
+
 
 ### difference between nltk / BERT
 
@@ -22,7 +24,7 @@ class CocoDataset(data.Dataset):
     '''
         Customized Coco Dataset compatible with DataLoader
     '''
-    def __init__(self, root, json, vocab, transform=None):
+    def __init__(self, root, json, vocab=None, transform=None):
         '''
             Set the path for images, captions and vocabulary wrapper
 
@@ -36,7 +38,10 @@ class CocoDataset(data.Dataset):
         self.root = root
         self.coco = COCO(json) # --> turn json file into COCO format
         self.ids = list(self.coco.anns.keys())
-        self.vocab  = vocab
+        if vocab is None:
+            self.vocab = DistilBertTokenizerFast.from_pretrained("distilbert-base-uncased")
+        else:
+            self.vocab  = vocab
         self.transform = transform
     
     def __getitem__(self, index):
@@ -88,7 +93,7 @@ def collate_fn(data):
 
     # merge captions with 0 padding (to be tested)
     lengths = [len(cap) for cap in captions]
-    targets = torch.zeros(len(captions), max(lengths)).long() # --> create tensor of size [batch_size, max(lengths)]
+    targets = torch.zeros(len(captions), 128).long() # --> create tensor of size [batch_size, 128]
     for i, cap in enumerate(captions):
         end = lengths[i]
         targets[i, :end] = cap[:end]
@@ -111,41 +116,6 @@ def get_loader(root, json, vocab, transform, batch_size, shuffle, num_workers=0)
                             collate_fn=collate_fn)
     return dataloader
 
-class TextEmbedder(nn.Module):
-    def __init__(self, hidden_size, text_channel_size, encoder_config):
-        super().__init__()
-        
-        self.text_emb_size = text_channel_size * 768
-        self.encoder = DistilBertModel.from_pretrained(encoder_config)
-
-        if encoder_config == "distilbert-base-uncased":
-            self.end_token = 102
-
-        self.mlp = nn.Sequential(
-            nn.Linear(self.text_emb_size, hidden_size, bias=True),
-            nn.SiLU(),
-            nn.Linear(hidden_size, hidden_size, bias=True)
-        )
-    
-    @staticmethod
-    def encoding(caption, encoder, end_token):
-
-        mask = torch.cumsum((cap == end_token), 1)
-        mask[cap == end_token] = 0
-        mask = (~mask.bool()).long()
-
-        with torch.no_grad():
-            emb = encoder(caption, attention_mask=mask)['last_hidden_state']
-        
-        emb = rearrange(emb, 'b c h -> b (c h)')
-        return emb
-
-    def forward(self, x):
-        x_emb = self.encoding(x, self.encoder, self.end_token)
-        x_mlp = self.mlp(x_emb)
-
-        return x_mlp
-
 if __name__ == '__main__':
 
     root = '/scratch/nm3607/datasets/coco/train2017'
@@ -164,6 +134,8 @@ if __name__ == '__main__':
 
     ########## Add to Text embedder (maybe we can use Bert here) ##########
     print(cap.shape)
-    textembedder = TextEmbedder(256, cap.shape[1], encoder_config="distilbert-base-uncased")
+    textembedder = TextEmbedder(256, encoder_config="distilbert-base-uncased")
     print(textembedder(cap).shape)
+    print(textembedder(cap))
+
     

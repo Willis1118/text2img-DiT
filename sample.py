@@ -17,6 +17,8 @@ from download import find_model
 from models import DiT_models
 import argparse
 
+from transformers import DistilBertTokenizerFast, DistilBertModel
+
 
 def main(args):
     # Setup PyTorch:
@@ -44,18 +46,25 @@ def main(args):
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
 
     # Labels to condition the model with (feel free to change):
-    class_labels = [207, 360, 387, 974, 88, 979, 417, 279]
+    # class_labels = [207, 360, 387, 974, 88, 979, 417, 279]
+    text_conditions = ["Man riding a bike"]
+
+    # Create text conditioning
+    tokenizer = DistilBertTokenizerFast.from_pretrained("distilbert-base-uncased")
+    tokens = tokenizer(text_conditions)
 
     # Create sampling noise:
-    n = len(class_labels)
+    # n = len(class_labels)
+    n = len(text_conditions)
     z = torch.randn(n, 4, latent_size, latent_size, device=device)
-    y = torch.tensor(class_labels, device=device)
+    # y = torch.tensor(class_labels, device=device)
+    y = torch.tensor(tokens, device=device)
 
     # Setup classifier-free guidance:
     z = torch.cat([z, z], 0)
     y_null = torch.tensor([1000] * n, device=device)
     y = torch.cat([y, y_null], 0)
-    model_kwargs = dict(y=y, cfg_scale=args.cfg_scale)
+    model_kwargs = dict(y=y, cfg_scale=args.cfg_scale) # --> param for penalize unconditional output
 
     # Sample images:
     samples = diffusion.p_sample_loop(

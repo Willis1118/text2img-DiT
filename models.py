@@ -15,6 +15,9 @@ import numpy as np
 import math
 from timm.models.vision_transformer import PatchEmbed, Attention, Mlp
 
+from transformers import DistilBertTokenizerFast, DistilBertModel
+from einops import rearrange
+
 
 def modulate(x, shift, scale):
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
@@ -94,7 +97,7 @@ class LabelEmbedder(nn.Module):
         return embeddings
 
 class TextEmbedder(nn.Module):
-    def __init__(self, hidden_size, text_channel_size, encoder_config):
+    def __init__(self, hidden_size, encoder_config, text_channel_size=128):
         '''
             Defines a Text embedder based on DistilBert
             Inputs:
@@ -120,12 +123,13 @@ class TextEmbedder(nn.Module):
     @staticmethod
     def encoding(caption, encoder, end_token):
 
-        mask = torch.cumsum((cap == end_token), 1)
-        mask[cap == end_token] = 0
+        mask = torch.cumsum((caption == end_token), 1)
+        mask[caption == end_token] = 0
         mask = (~mask.bool()).long()
 
         with torch.no_grad():
             emb = encoder(caption, attention_mask=mask)['last_hidden_state']
+            print(emb)
         
         emb = rearrange(emb, 'b c h -> b (c h)')
         return emb
@@ -213,7 +217,8 @@ class DiT(nn.Module):
 
         self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)
-        self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
+        # self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
+        self.y_embedder = TextEmbedder(hidden_size, "distilbert-base-uncased")
         num_patches = self.x_embedder.num_patches
         # Will use fixed sin-cos embedding:
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
@@ -243,7 +248,9 @@ class DiT(nn.Module):
         nn.init.constant_(self.x_embedder.proj.bias, 0)
 
         # Initialize label embedding table:
-        nn.init.normal_(self.y_embedder.embedding_table.weight, std=0.02)
+        # nn.init.normal_(self.y_embedder.embedding_table.weight, std=0.02)
+        nn.init.normal_(self.y_embedder.mlp[0].weight, std=0.02)
+        nn.init.normal_(self.y_embedder.mlp[2].weight, std=0.02)
 
         # Initialize timestep embedding MLP:
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
@@ -285,7 +292,8 @@ class DiT(nn.Module):
         # --> patchify images and add positional embedding
         x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
         t = self.t_embedder(t)                   # (N, D)
-        y = self.y_embedder(y, self.training)    # (N, D)
+        # y = self.y_embedder(y, self.training)    # (N, D)
+        y = self.y_embedder(y)                   # (N, D)
 
         ########### Add text conditioning here ##########
         c = t + y                                # (N, D)

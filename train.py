@@ -30,6 +30,7 @@ import os
 from models import DiT_models
 from diffusion import create_diffusion
 from diffusers.models import AutoencoderKL
+from coco import CocoDataset, collate_fn
 
 
 #################################################################################
@@ -146,7 +147,7 @@ def main(args):
     # Note that parameter initialization is done within the DiT constructor
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
     requires_grad(ema, False)
-    model = DDP(model.to(device), device_ids=[rank])
+    model = DDP(model.to(device), device_ids=[rank], find_unused_parameters=True)
     diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule, MSE loss
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
     logger.info(f"DiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
@@ -161,7 +162,7 @@ def main(args):
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
     ])
-    dataset = ImageFolder(args.data_path, transform=transform)
+    dataset = CocoDataset(args.data_path, '/scratch/nm3607/datasets/coco/annotations/captions_train2017.json', transform=transform)
     sampler = DistributedSampler(
         dataset,
         num_replicas=dist.get_world_size(),
@@ -173,6 +174,7 @@ def main(args):
         dataset,
         batch_size=int(args.global_batch_size // dist.get_world_size()),
         shuffle=False,
+        collate_fn=collate_fn,
         sampler=sampler,
         num_workers=args.num_workers,
         pin_memory=True,
