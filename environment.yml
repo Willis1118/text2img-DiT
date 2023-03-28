@@ -13,3 +13,6 @@ dependencies:
     - diffusers
     - accelerate
     - pycocotools
+    - transformers
+    - einops
+    - pytorch-fid

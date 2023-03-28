@@ -129,7 +129,6 @@ class TextEmbedder(nn.Module):
 
         with torch.no_grad():
             emb = encoder(caption, attention_mask=mask)['last_hidden_state']
-            print(emb)
         
         emb = rearrange(emb, 'b c h -> b (c h)')
         return emb

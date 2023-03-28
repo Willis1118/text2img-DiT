@@ -47,23 +47,31 @@ def main(args):
 
     # Labels to condition the model with (feel free to change):
     # class_labels = [207, 360, 387, 974, 88, 979, 417, 279]
-    text_conditions = ["Man riding a bike"]
+    text_conditions = ["A balloon"]
 
     # Create text conditioning
     tokenizer = DistilBertTokenizerFast.from_pretrained("distilbert-base-uncased")
-    tokens = tokenizer(text_conditions)
+    tokens = torch.tensor(tokenizer(text_conditions)['input_ids'])
+
+    lengths = [len(tok) for tok in tokens]
+    targets = torch.zeros(len(tokens), 128).long() # --> create tensor of size [batch_size, 128]
+    for i, cap in enumerate(tokens):
+        end = lengths[i]
+        targets[i, :end] = cap[:end]
 
     # Create sampling noise:
     # n = len(class_labels)
     n = len(text_conditions)
     z = torch.randn(n, 4, latent_size, latent_size, device=device)
     # y = torch.tensor(class_labels, device=device)
-    y = torch.tensor(tokens, device=device)
+    y = targets
+
 
     # Setup classifier-free guidance:
     z = torch.cat([z, z], 0)
-    y_null = torch.tensor([1000] * n, device=device)
-    y = torch.cat([y, y_null], 0)
+    y_null = torch.tensor([0 for i in range(128)] * n, device=device)
+    print(y_null)
+    y = torch.cat([y, y_null.unsqueeze(0)], 0)
     model_kwargs = dict(y=y, cfg_scale=args.cfg_scale) # --> param for penalize unconditional output
 
     # Sample images:
