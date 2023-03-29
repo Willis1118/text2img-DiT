@@ -13,6 +13,10 @@ For a simple single-GPU/CPU sampling script, see sample.py.
 """
 import torch
 import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
+from torchvision import transforms
 from models import DiT_models
 from download import find_model
 from diffusion import create_diffusion
@@ -23,6 +27,8 @@ from PIL import Image
 import numpy as np
 import math
 import argparse
+
+from coco import CocoDataset, collate_fn
 
 
 def create_npz_from_sample_folder(sample_dir, num=50_000):
@@ -40,6 +46,26 @@ def create_npz_from_sample_folder(sample_dir, num=50_000):
     np.savez(npz_path, arr_0=samples)
     print(f"Saved .npz file to {npz_path} [shape={samples.shape}].")
     return npz_path
+
+def center_crop_arr(pil_image, image_size):
+    """
+    Center cropping implementation from ADM.
+    https://github.com/openai/guided-diffusion/blob/8fb3ad9197f16bbc40620447b2742e13458d2831/guided_diffusion/image_datasets.py#L126
+    """
+    while min(*pil_image.size) >= 2 * image_size:
+        pil_image = pil_image.resize(
+            tuple(x // 2 for x in pil_image.size), resample=Image.BOX
+        )
+
+    scale = image_size / min(*pil_image.size)
+    pil_image = pil_image.resize(
+        tuple(round(x * scale) for x in pil_image.size), resample=Image.BICUBIC
+    )
+
+    arr = np.array(pil_image)
+    crop_y = (arr.shape[0] - image_size) // 2
+    crop_x = (arr.shape[1] - image_size) // 2
+    return Image.fromarray(arr[crop_y: crop_y + image_size, crop_x: crop_x + image_size])
 
 
 def main(args):
@@ -105,15 +131,47 @@ def main(args):
     pbar = range(iterations)
     pbar = tqdm(pbar) if rank == 0 else pbar
     total = 0
+
+    # Load the validation annotation file
+    # Hardcoded for now
+    transform = transforms.Compose([
+        transforms.Lambda(lambda pil_image: center_crop_arr(pil_image, args.image_size)),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
+    ])
+    dataset = CocoDataset('/scratch/nm3607/datasets/coco/val2017', '/scratch/nm3607/datasets/coco/annotations/captions_val2017.json', transform=transform)
+    sampler = DistributedSampler(
+        dataset,
+        num_replicas=dist.get_world_size(),
+        rank=rank,
+        shuffle=True,
+        seed=args.global_seed
+    )
+    loader = DataLoader(
+        dataset,
+        batch_size=args.per_proc_batch_size,
+        shuffle=False,
+        collate_fn=collate_fn,
+        sampler=sampler,
+        num_workers=dist.get_world_size(),
+        pin_memory=True,
+        drop_last=True
+    )
+
     for _ in pbar:
         # Sample inputs:
         z = torch.randn(n, model.in_channels, latent_size, latent_size, device=device)
-        y = torch.randint(0, args.num_classes, (n,), device=device)
+
+        _, y = next(iter(loader))
+        y = y.to(device)
+        # y = torch.randint(0, args.num_classes, (n,), device=device)
 
         # Setup classifier-free guidance:
         if using_cfg:
             z = torch.cat([z, z], 0)
-            y_null = torch.tensor([1000] * n, device=device)
+            # y_null = torch.tensor([1000] * n, device=device)
+            y_null = torch.zeros_like(y).to(device)
             y = torch.cat([y, y_null], 0)
             model_kwargs = dict(y=y, cfg_scale=args.cfg_scale)
             sample_fn = model.forward_with_cfg
@@ -158,6 +216,8 @@ if __name__ == "__main__":
     parser.add_argument("--cfg-scale",  type=float, default=1.5)
     parser.add_argument("--num-sampling-steps", type=int, default=250)
     parser.add_argument("--global-seed", type=int, default=0)
+    parser.add_argument("--prompt-path", type=str, default=None,
+                        help="Optional path to an annotation file.")
     parser.add_argument("--tf32", action=argparse.BooleanOptionalAction, default=True,
                         help="By default, use TF32 matmuls. This massively accelerates sampling on Ampere GPUs.")
     parser.add_argument("--ckpt", type=str, default=None,

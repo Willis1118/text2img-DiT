@@ -8,8 +8,6 @@ from torch.utils.data import DataLoader
 from torchvision.utils import save_image
 from torchvision import transforms
 
-import nltk
-import spacy
 from pycocotools.coco import COCO
 from transformers import DistilBertTokenizerFast, DistilBertModel
 from tqdm import tqdm

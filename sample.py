@@ -8,6 +8,7 @@
 Sample new images from a pre-trained DiT.
 """
 import torch
+import torch.nn.functional as F
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 from torchvision.utils import save_image
@@ -47,31 +48,29 @@ def main(args):
 
     # Labels to condition the model with (feel free to change):
     # class_labels = [207, 360, 387, 974, 88, 979, 417, 279]
-    text_conditions = ["A balloon"]
+    text_conditions = ["A balloon", "A man riding a bike", "A girl eating an icecream", "A unicorn"]
 
     # Create text conditioning
     tokenizer = DistilBertTokenizerFast.from_pretrained("distilbert-base-uncased")
-    tokens = torch.tensor(tokenizer(text_conditions)['input_ids'])
+    tokens = tokenizer(text_conditions)['input_ids']
 
     lengths = [len(tok) for tok in tokens]
     targets = torch.zeros(len(tokens), 128).long() # --> create tensor of size [batch_size, 128]
     for i, cap in enumerate(tokens):
         end = lengths[i]
-        targets[i, :end] = cap[:end]
+        targets[i, :end] = torch.tensor(cap[:end])
 
     # Create sampling noise:
     # n = len(class_labels)
     n = len(text_conditions)
     z = torch.randn(n, 4, latent_size, latent_size, device=device)
     # y = torch.tensor(class_labels, device=device)
-    y = targets
-
+    y = torch.tensor(targets).to(device)
 
     # Setup classifier-free guidance:
     z = torch.cat([z, z], 0)
-    y_null = torch.tensor([0 for i in range(128)] * n, device=device)
-    print(y_null)
-    y = torch.cat([y, y_null.unsqueeze(0)], 0)
+    y_null = torch.zeros_like(y).to(device)
+    y = torch.cat([y, y_null], 0)
     model_kwargs = dict(y=y, cfg_scale=args.cfg_scale) # --> param for penalize unconditional output
 
     # Sample images:

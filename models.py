@@ -122,8 +122,9 @@ class TextEmbedder(nn.Module):
     
     @staticmethod
     def encoding(caption, encoder, end_token):
-
-        mask = torch.cumsum((caption == end_token), 1)
+        
+        device = caption.device
+        mask = torch.cumsum((caption == end_token), 1).to(device)
         mask[caption == end_token] = 0
         mask = (~mask.bool()).long()
 
@@ -134,7 +135,7 @@ class TextEmbedder(nn.Module):
         return emb
 
     def forward(self, x):
-        x_emb = self.encoding(x, self.encoder, self.end_token)
+        x_emb = self.encoding(x, self.encoder.to(x.device), self.end_token)
         x_mlp = self.mlp(x_emb)
 
         return x_mlp
