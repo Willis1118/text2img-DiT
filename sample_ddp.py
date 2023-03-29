@@ -136,9 +136,7 @@ def main(args):
     # Hardcoded for now
     transform = transforms.Compose([
         transforms.Lambda(lambda pil_image: center_crop_arr(pil_image, args.image_size)),
-        transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
     ])
     dataset = CocoDataset('/scratch/nm3607/datasets/coco/val2017', '/scratch/nm3607/datasets/coco/annotations/captions_val2017.json', transform=transform)
     sampler = DistributedSampler(
@@ -163,7 +161,7 @@ def main(args):
         # Sample inputs:
         z = torch.randn(n, model.in_channels, latent_size, latent_size, device=device)
 
-        _, y = next(iter(loader))
+        x, y = next(iter(loader))
         y = y.to(device)
         # y = torch.randint(0, args.num_classes, (n,), device=device)
 
@@ -188,17 +186,20 @@ def main(args):
 
         samples = vae.decode(samples / 0.18215).sample
         samples = torch.clamp(127.5 * samples + 128.0, 0, 255).permute(0, 2, 3, 1).to("cpu", dtype=torch.uint8).numpy()
+        x = x.permute(0, 2, 3, 1).to("cpu", dtype=torch.uint8).numpy()
 
         # Save samples to disk as individual .png files
         for i, sample in enumerate(samples):
             index = i * dist.get_world_size() + rank + total
             Image.fromarray(sample).save(f"{sample_folder_dir}/{index:06d}.png")
+            Image.fromarray(sample).save(f"samples/coco_val/{index:06d}.png")
         total += global_batch_size
 
     # Make sure all processes have finished saving their samples before attempting to convert to .npz
     dist.barrier()
     if rank == 0:
         create_npz_from_sample_folder(sample_folder_dir, args.num_fid_samples)
+        create_npz_from_sample_folder("samples/coco_val/", args.num_fid_samples)
         print("Done.")
     dist.barrier()
     dist.destroy_process_group()
