@@ -48,7 +48,10 @@ def main(args):
 
     # Labels to condition the model with (feel free to change):
     # class_labels = [207, 360, 387, 974, 88, 979, 417, 279]
-    text_conditions = ["A balloon", "A man riding a bike", "A girl eating an icecream", "A unicorn"]
+    text_conditions = ["The man at bat readies to swing at the pitch while the umpire looks on",
+                       "A large bus sitting next to a very tall building",
+                       "A horse carring a large load of hay and two people sitting on it",
+                       "Bunk bed with a narrow shelf sitting underneath it" ]
 
     # Create text conditioning
     tokenizer = DistilBertTokenizerFast.from_pretrained("distilbert-base-uncased")
@@ -65,7 +68,7 @@ def main(args):
     n = len(text_conditions)
     z = torch.randn(n, 4, latent_size, latent_size, device=device)
     # y = torch.tensor(class_labels, device=device)
-    y = torch.tensor(targets).to(device)
+    y = targets.to(device)
 
     # Setup classifier-free guidance:
     z = torch.cat([z, z], 0)
@@ -81,7 +84,8 @@ def main(args):
     samples = vae.decode(samples / 0.18215).sample
 
     # Save and display images:
-    save_image(samples, "sample.png", nrow=4, normalize=True, value_range=(-1, 1))
+    model_string_name = args.model.replace("/", "-")
+    save_image(samples, f"sample-{model_string_name}.png", nrow=4, normalize=True, value_range=(-1, 1))
 
 
 if __name__ == "__main__":

@@ -5,3 +5,4 @@ samples
 *.sbatch
 *.out
 *.png
+*.pb

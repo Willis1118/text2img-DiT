@@ -161,7 +161,7 @@ def main(args):
         # Sample inputs:
         z = torch.randn(n, model.in_channels, latent_size, latent_size, device=device)
 
-        x, y = next(iter(loader))
+        _, y = next(iter(loader))
         y = y.to(device)
         # y = torch.randint(0, args.num_classes, (n,), device=device)
 
@@ -186,13 +186,11 @@ def main(args):
 
         samples = vae.decode(samples / 0.18215).sample
         samples = torch.clamp(127.5 * samples + 128.0, 0, 255).permute(0, 2, 3, 1).to("cpu", dtype=torch.uint8).numpy()
-        x = x.permute(0, 2, 3, 1).to("cpu", dtype=torch.uint8).numpy()
 
         # Save samples to disk as individual .png files
         for i, sample in enumerate(samples):
             index = i * dist.get_world_size() + rank + total
             Image.fromarray(sample).save(f"{sample_folder_dir}/{index:06d}.png")
-            Image.fromarray(sample).save(f"samples/coco_val/{index:06d}.png")
         total += global_batch_size
 
     # Make sure all processes have finished saving their samples before attempting to convert to .npz
