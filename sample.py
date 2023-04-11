@@ -11,15 +11,41 @@ import torch
 import torch.nn.functional as F
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
+from torch.utils.data import DataLoader
+from torchvision import transforms
+
 from torchvision.utils import save_image
 from diffusion import create_diffusion
 from diffusers.models import AutoencoderKL
 from download import find_model
 from models import DiT_models
 import argparse
+import os
 
 from transformers import DistilBertTokenizerFast, DistilBertModel
+from coco import CocoDataset, collate_fn
+from sample_ddp import center_crop_arr
 
+def ids_to_tokens(tokenizer, cap):
+    anns = []
+    for i, ids in enumerate(cap):
+        tokens = tokenizer.convert_ids_to_tokens(ids)
+        ann = ''
+        for token in tokens:
+            if(token == '[CLS]'):
+                continue
+            elif(token == '[SEP]'):
+                break
+            elif(token == ',' or token == '.'):
+                ann += token
+            elif(token.find('#') != -1):
+                token = token.replace('#','')
+                ann += token
+            else:
+                ann += " " + token 
+
+        anns.append(ann[1:])
+    return anns
 
 def main(args):
     # Setup PyTorch:
@@ -31,6 +57,21 @@ def main(args):
         assert args.model == "DiT-XL/2", "Only DiT-XL/2 models are available for auto-download."
         assert args.image_size in [256, 512]
         assert args.num_classes == 1000
+
+    assert os.path.exists(args.data_path), f'Could not find COCO2017 at {args.data_path}'
+
+    val_path = os.path.join(args.data_path, "val2017")
+    ann_path = os.path.join(args.data_path, "annotations/captions_val2017.json")
+
+    os.makedirs(args.save_dir, exist_ok=True)
+
+    model_string_name = args.model.replace("/", "-")
+    ckpt_string_name = os.path.basename(args.ckpt).replace(".pt", "") if args.ckpt else "pretrained"
+    folder_name = f"{model_string_name}-{ckpt_string_name}-size-{args.image_size}-vae-{args.vae}-" \
+                  f"cfg-{args.cfg_scale}-seed-{args.seed}"
+    sample_folder_dir = f"{args.save_dir}/{folder_name}"
+    os.makedirs(sample_folder_dir, exist_ok=True)
+    print(f"Saving .png samples at {sample_folder_dir}")
 
     # Load model:
     latent_size = args.image_size // 8
@@ -48,50 +89,73 @@ def main(args):
 
     # Labels to condition the model with (feel free to change):
     # class_labels = [207, 360, 387, 974, 88, 979, 417, 279]
-    text_conditions = ["The man at bat readies to swing at the pitch while the umpire looks on",
-                       "A large bus sitting next to a very tall building",
-                       "A horse carring a large load of hay and two people sitting on it",
-                       "Bunk bed with a narrow shelf sitting underneath it" ]
 
-    # Create text conditioning
-    tokenizer = DistilBertTokenizerFast.from_pretrained("distilbert-base-uncased")
-    tokens = tokenizer(text_conditions)['input_ids']
-
-    lengths = [len(tok) for tok in tokens]
-    targets = torch.zeros(len(tokens), 128).long() # --> create tensor of size [batch_size, 128]
-    for i, cap in enumerate(tokens):
-        end = lengths[i]
-        targets[i, :end] = torch.tensor(cap[:end])
-
-    # Create sampling noise:
-    # n = len(class_labels)
-    n = len(text_conditions)
-    z = torch.randn(n, 4, latent_size, latent_size, device=device)
-    # y = torch.tensor(class_labels, device=device)
-    y = targets.to(device)
-
-    # Setup classifier-free guidance:
-    z = torch.cat([z, z], 0)
-    y_null = torch.zeros_like(y).to(device)
-    y = torch.cat([y, y_null], 0)
-    model_kwargs = dict(y=y, cfg_scale=args.cfg_scale) # --> param for penalize unconditional output
-
-    # Sample images:
-    samples = diffusion.p_sample_loop(
-        model.forward_with_cfg, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
+    transform = transforms.Compose([
+        transforms.Lambda(lambda pil_image: center_crop_arr(pil_image, args.image_size)),
+        transforms.ToTensor(),
+    ])
+    dataset = CocoDataset(val_path, ann_path, transform=transform)
+    dataloader = DataLoader(
+        dataset,
+        batch_size=32,
+        shuffle=True,
+        collate_fn=collate_fn,
     )
-    samples, _ = samples.chunk(2, dim=0)  # Remove null class samples
-    samples = vae.decode(samples / 0.18215).sample
 
-    # Save and display images:
-    model_string_name = args.model.replace("/", "-")
-    save_image(samples, f"sample-{model_string_name}.png", nrow=4, normalize=True, value_range=(-1, 1))
+    tokenizer = DistilBertTokenizerFast.from_pretrained('distilbert-base-uncased')
+    img_idx = 0
+    cap_idx = 0
+    for _ in range(10):
+        # Create text conditioning
+        img, cap = next(iter(dataloader))
+
+        # Create sampling noise:
+        # n = len(class_labels)
+        n = cap.shape[0]
+        z = torch.randn(n, 4, latent_size, latent_size, device=device)
+        # y = torch.tensor(class_labels, device=device)
+        y = cap.to(device)
+
+        # Setup classifier-free guidance:
+        z = torch.cat([z, z], 0)
+        y_null = torch.zeros_like(y).to(device)
+        y = torch.cat([y, y_null], 0)
+        model_kwargs = dict(y=y, cfg_scale=args.cfg_scale) # --> param for penalize unconditional output
+        # model_kwargs = dict(y=y)
+
+        # Sample images:
+        samples = diffusion.p_sample_loop(
+            model.forward_with_cfg, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
+        )
+        # samples = diffusion.p_sample_loop(
+        #     model.forward, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
+        # )
+        samples, _ = samples.chunk(2, dim=0)  # Remove null class samples
+        samples = vae.decode(samples / 0.18215).sample
+
+        for sample in samples:
+            save_image(sample, os.path.join(sample_folder_dir, f"sample-{img_idx}.png"), normalize=True, value_range=(-1,1))
+            img_idx += 1
+
+        # save_image(samples, f"sample-{model_string_name}.png", nrow=4, normalize=True, value_range=(-1, 1))
+    
+        anns = ids_to_tokens(tokenizer, cap)
+
+        with open(os.path.join(args.save_dir, f"{model_string_name}-{ckpt_string_name}-size-{args.image_size}-vae-{args.vae}-" \
+                    f"cfg-{args.cfg_scale}-seed-{args.seed}.txt"), 'a') as f:
+            for ann in anns:
+                f.write(f'{cap_idx}: {ann}\n')
+                cap_idx += 1
+    
+    print("Done.")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, choices=list(DiT_models.keys()), default="DiT-XL/2")
     parser.add_argument("--vae", type=str, choices=["ema", "mse"], default="mse")
+    parser.add_argument("--data-path", type=str, required=True)
+    parser.add_argument("--save-dir", type=str, default="display_samples")
     parser.add_argument("--image-size", type=int, choices=[256, 512], default=256)
     parser.add_argument("--num-classes", type=int, default=1000)
     parser.add_argument("--cfg-scale", type=float, default=4.0)

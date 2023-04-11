@@ -49,6 +49,27 @@ def update_ema(ema_model, model, decay=0.9999):
         # TODO: Consider applying only to params that require_grad to avoid small numerical changes of pos_embed
         ema_params[name].mul_(decay).add_(param.data, alpha=1 - decay)
 
+def update_model_state(model_state, state_dict_path, fine_tuning=False):
+
+    pretrained_state = torch.load(state_dict_path, map_location=lambda storage, loc: storage)
+    opt_state = pretrained_state["opt"]
+
+    if fine_tuning:
+        pretrained_state = pretrained_state["ema"]
+    else:
+        pretrained_state = pretrained_state["model"]
+
+    for name, param in pretrained_state.items():
+        if name not in model_state:
+            continue
+        elif isinstance(param, torch.nn.parameter.Parameter):
+            param = param.data
+        model_state[name].copy_(param)
+
+        if fine_tuning == True:
+            model_state[name].requires_grad = False
+    
+    return model_state, opt_state
 
 def requires_grad(model, flag=True):
     """
@@ -144,6 +165,22 @@ def main(args):
         input_size=latent_size,
         num_classes=args.num_classes
     )
+
+    # Setup optimizer (we used default Adam betas=(0.9, 0.999) and a constant learning rate of 1e-4 in our paper):
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
+
+    ckpt_steps = 0 # steps loaded from checkpoint
+
+    if args.ckpt is not None:
+        assert os.path.isfile(args.ckpt), f'Could not find DiT checkpoint at {args.ckpt}'
+        path = os.path.normpath(args.ckpt)
+        path = path.split(os.sep)
+        ckpt_steps = path[-1][0:-3]
+        model_state, opt_state = update_model_state(model.state_dict(), args.ckpt, fine_tuning=args.fine_tuning)
+        model.load_state_dict(model_state)
+        opt.load_state_dict(opt_state)
+        print("Checkpoint loaded successfully")
+
     # Note that parameter initialization is done within the DiT constructor
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
     requires_grad(ema, False)
@@ -152,17 +189,21 @@ def main(args):
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
     logger.info(f"DiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
-    # Setup optimizer (we used default Adam betas=(0.9, 0.999) and a constant learning rate of 1e-4 in our paper):
-    opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
-
     # Setup data:
+
+    assert os.path.isdir(args.data_path), f'Could not find COCO2017 at {args.data_path}'
+
     transform = transforms.Compose([
         transforms.Lambda(lambda pil_image: center_crop_arr(pil_image, args.image_size)),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
     ])
-    dataset = CocoDataset(args.data_path, '/scratch/nm3607/datasets/coco/annotations/captions_train2017.json', transform=transform)
+
+    val_path = os.path.join(args.data_path, 'train2017')
+    ann_path = os.path.join(args.data_path, 'annotations/captions_train2017.json')
+
+    dataset = CocoDataset(val_path, ann_path, transform=transform)
     sampler = DistributedSampler(
         dataset,
         num_replicas=dist.get_world_size(),
@@ -240,7 +281,7 @@ def main(args):
                         "opt": opt.state_dict(),
                         "args": args
                     }
-                    checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
+                    checkpoint_path = f"{checkpoint_dir}/{train_steps + ckpt_steps:07d}.pt"
                     torch.save(checkpoint, checkpoint_path)
                     logger.info(f"Saved checkpoint to {checkpoint_path}")
                 dist.barrier()
@@ -267,5 +308,7 @@ if __name__ == "__main__":
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--log-every", type=int, default=100)
     parser.add_argument("--ckpt-every", type=int, default=50_000)
+    parser.add_argument("--ckpt", type=str, default=None)
+    parser.add_argument("--fine-tuning", action="store_true")
     args = parser.parse_args()
     main(args)

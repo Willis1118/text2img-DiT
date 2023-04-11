@@ -2,7 +2,10 @@ __pycache__
 results
 pretrained_models
 samples
+outlog
+sbatch
 *.sbatch
 *.out
 *.png
 *.pb
+*.txt

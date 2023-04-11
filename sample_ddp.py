@@ -27,6 +27,7 @@ from PIL import Image
 import numpy as np
 import math
 import argparse
+import datetime
 
 from coco import CocoDataset, collate_fn
 
@@ -77,7 +78,8 @@ def main(args):
     torch.set_grad_enabled(False)
 
     # Setup DDP:
-    dist.init_process_group("nccl")
+    # dist.init_process_group("nccl")
+    dist.init_process_group(backend='nccl', init_method='env://', timeout=datetime.timedelta(seconds=5400))
     rank = dist.get_rank()
     device = rank % torch.cuda.device_count()
     seed = args.global_seed * dist.get_world_size() + rank
@@ -89,6 +91,11 @@ def main(args):
         assert args.model == "DiT-XL/2", "Only DiT-XL/2 models are available for auto-download."
         assert args.image_size in [256, 512]
         assert args.num_classes == 1000
+
+    assert os.path.exists(args.data_path), f'Could not find COCO2017 at {args.data_path}'
+
+    val_path = os.path.join(args.data_path, 'val2017')
+    ann_path = os.path.join(args.data_path, 'annotations/captions_val2017.json')
 
     # Load model:
     latent_size = args.image_size // 8
@@ -138,7 +145,7 @@ def main(args):
         transforms.Lambda(lambda pil_image: center_crop_arr(pil_image, args.image_size)),
         transforms.ToTensor(),
     ])
-    dataset = CocoDataset('/scratch/nm3607/datasets/coco/val2017', '/scratch/nm3607/datasets/coco/annotations/captions_val2017.json', transform=transform)
+    dataset = CocoDataset(val_path, ann_path, transform=transform)
     sampler = DistributedSampler(
         dataset,
         num_replicas=dist.get_world_size(),
@@ -214,8 +221,7 @@ if __name__ == "__main__":
     parser.add_argument("--cfg-scale",  type=float, default=1.5)
     parser.add_argument("--num-sampling-steps", type=int, default=250)
     parser.add_argument("--global-seed", type=int, default=0)
-    parser.add_argument("--prompt-path", type=str, default=None,
-                        help="Optional path to an annotation file.")
+    parser.add_argument("--data-path", type=str, required=True)
     parser.add_argument("--tf32", action=argparse.BooleanOptionalAction, default=True,
                         help="By default, use TF32 matmuls. This massively accelerates sampling on Ampere GPUs.")
     parser.add_argument("--ckpt", type=str, default=None,
