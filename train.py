@@ -52,12 +52,16 @@ def update_ema(ema_model, model, decay=0.9999):
 def update_model_state(model_state, state_dict_path, fine_tuning=False):
 
     pretrained_state = torch.load(state_dict_path, map_location=lambda storage, loc: storage)
-    opt_state = pretrained_state["opt"]
+    ckpt_steps = 0
 
     if fine_tuning:
-        pretrained_state = pretrained_state["ema"]
+        opt_state = None
     else:
+        opt_state = pretrained_state["opt"]
         pretrained_state = pretrained_state["model"]
+
+        path = state_dict_path.split(os.sep)
+        ckpt_steps = int(path[-1][0:-3])
 
     for name, param in pretrained_state.items():
         if name not in model_state:
@@ -66,10 +70,10 @@ def update_model_state(model_state, state_dict_path, fine_tuning=False):
             param = param.data
         model_state[name].copy_(param)
 
-        if fine_tuning == True:
+        if fine_tuning == True and "adaLN_modulation" not in name:
             model_state[name].requires_grad = False
     
-    return model_state, opt_state
+    return model_state, opt_state, ckpt_steps
 
 def requires_grad(model, flag=True):
     """
@@ -166,20 +170,18 @@ def main(args):
         num_classes=args.num_classes
     )
 
-    # Setup optimizer (we used default Adam betas=(0.9, 0.999) and a constant learning rate of 1e-4 in our paper):
-    opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
+    model_state = None
+    opt_state = None
 
+    # Load pretrained state
     ckpt_steps = 0 # steps loaded from checkpoint
-
     if args.ckpt is not None:
         assert os.path.isfile(args.ckpt), f'Could not find DiT checkpoint at {args.ckpt}'
-        path = os.path.normpath(args.ckpt)
-        path = path.split(os.sep)
-        ckpt_steps = path[-1][0:-3]
-        model_state, opt_state = update_model_state(model.state_dict(), args.ckpt, fine_tuning=args.fine_tuning)
+        
+        model_state, opt_state, ckpt_steps = update_model_state(model.state_dict(), args.ckpt, fine_tuning=args.fine_tuning)
         model.load_state_dict(model_state)
-        opt.load_state_dict(opt_state)
-        print("Checkpoint loaded successfully")
+
+        print("Model Checkpoint loaded successfully")
 
     # Note that parameter initialization is done within the DiT constructor
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
@@ -189,8 +191,16 @@ def main(args):
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
     logger.info(f"DiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
-    # Setup data:
+    # Setup optimizer (we used default Adam betas=(0.9, 0.999) and a constant learning rate of 1e-4 in our paper):
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-5, weight_decay=0)
 
+    logger.info(f"DiT optimizer: learning rate {1e-5}")
+
+    # if opt_state is not None:
+    #     opt.load_state_dict(opt_state)
+    #     print("Optimizer Checkpoint loaded successfully")
+    
+    # Setup data:
     assert os.path.isdir(args.data_path), f'Could not find COCO2017 at {args.data_path}'
 
     transform = transforms.Compose([
@@ -281,7 +291,7 @@ def main(args):
                         "opt": opt.state_dict(),
                         "args": args
                     }
-                    checkpoint_path = f"{checkpoint_dir}/{train_steps + ckpt_steps:07d}.pt"
+                    checkpoint_path = f"{checkpoint_dir}/{(train_steps + ckpt_steps):07d}.pt"
                     torch.save(checkpoint, checkpoint_path)
                     logger.info(f"Saved checkpoint to {checkpoint_path}")
                 dist.barrier()
