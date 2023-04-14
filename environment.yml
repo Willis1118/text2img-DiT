@@ -16,3 +16,4 @@ dependencies:
     - transformers
     - einops
     - pytorch-fid
+    - wandb
