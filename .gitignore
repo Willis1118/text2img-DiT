@@ -3,7 +3,7 @@ results
 pretrained_models
 samples
 outlog
-sbatch
+wandb
 *.sbatch
 *.out
 *.png

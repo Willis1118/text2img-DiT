@@ -31,6 +31,7 @@ from models import DiT_models
 from diffusion import create_diffusion
 from diffusers.models import AutoencoderKL
 from coco import CocoDataset, collate_fn
+from wandb_utils import initialize_wandb, log_loss_dict, log_images
 
 
 #################################################################################
@@ -70,8 +71,8 @@ def update_model_state(model_state, state_dict_path, fine_tuning=False):
             param = param.data
         model_state[name].copy_(param)
 
-        if fine_tuning == True and "adaLN_modulation" not in name:
-            model_state[name].requires_grad = False
+        # if fine_tuning == True and "adaLN_modulation" not in name:
+        #     model_state[name].requires_grad = False
     
     return model_state, opt_state, ckpt_steps
 
@@ -159,6 +160,14 @@ def main(args):
         os.makedirs(checkpoint_dir, exist_ok=True)
         logger = create_logger(experiment_dir)
         logger.info(f"Experiment directory created at {experiment_dir}")
+
+        wandb_configs = {
+            "model": model_string_name,
+            "epochs": args.epochs,
+            "learning_rate": 1e-4,
+            "batch_size": args.global_batch_size,
+        }
+        initialize_wandb(wandb_configs, exp_name=f"{model_string_name}-{experiment_index}")
     else:
         logger = create_logger(None)
 
@@ -188,13 +197,14 @@ def main(args):
     requires_grad(ema, False)
     model = DDP(model.to(device), device_ids=[rank], find_unused_parameters=True)
     diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule, MSE loss
+    test_diffusion = create_diffusion(str(250)) # for sampling
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
     logger.info(f"DiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     # Setup optimizer (we used default Adam betas=(0.9, 0.999) and a constant learning rate of 1e-4 in our paper):
-    opt = torch.optim.AdamW(model.parameters(), lr=1e-6, weight_decay=0)
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
 
-    logger.info(f"DiT optimizer: learning rate {1e-6}")
+    logger.info(f"DiT optimizer: learning rate {1e-4}")
 
     # if opt_state is not None:
     #     opt.load_state_dict(opt_state)
@@ -203,35 +213,36 @@ def main(args):
     # Setup data:
     assert os.path.isdir(args.data_path), f'Could not find COCO2017 at {args.data_path}'
 
-    transform = transforms.Compose([
+    train_transform = transforms.Compose([
         transforms.Lambda(lambda pil_image: center_crop_arr(pil_image, args.image_size)),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
     ])
 
-    val_path = os.path.join(args.data_path, 'train2017')
-    ann_path = os.path.join(args.data_path, 'annotations/captions_train2017.json')
+    train_path = os.path.join(args.data_path, 'train2017')
+    train_ann_path = os.path.join(args.data_path, 'annotations/captions_train2017.json')
 
-    dataset = CocoDataset(val_path, ann_path, transform=transform)
-    sampler = DistributedSampler(
-        dataset,
+    train_dataset = CocoDataset(train_path, train_ann_path, transform=train_transform)
+    train_sampler = DistributedSampler(
+        train_dataset,
         num_replicas=dist.get_world_size(),
         rank=rank,
         shuffle=True,
         seed=args.global_seed
     )
-    loader = DataLoader(
-        dataset,
+    train_loader = DataLoader(
+        train_dataset,
         batch_size=int(args.global_batch_size // dist.get_world_size()),
         shuffle=False,
         collate_fn=collate_fn,
-        sampler=sampler,
+        sampler=train_sampler,
         num_workers=args.num_workers,
         pin_memory=True,
         drop_last=True
     )
-    logger.info(f"Dataset contains {len(dataset):,} images ({args.data_path})")
+
+    logger.info(f"Dataset contains {len(train_dataset):,} images ({args.data_path})")
 
     # Prepare models for training:
     update_ema(ema, model.module, decay=0)  # Ensure EMA is initialized with synced weights
@@ -246,9 +257,9 @@ def main(args):
 
     logger.info(f"Training for {args.epochs} epochs...")
     for epoch in range(args.epochs):
-        sampler.set_epoch(epoch)
+        train_sampler.set_epoch(epoch)
         logger.info(f"Beginning epoch {epoch}...")
-        for x, y in loader:
+        for x, y in train_loader:
             x = x.to(device)
             y = y.to(device)
             with torch.no_grad():
@@ -267,7 +278,7 @@ def main(args):
             running_loss += loss.item()
             log_steps += 1
             train_steps += 1
-            if train_steps % args.log_every == 0:
+            if train_steps % args.log_every == 0 and train_steps > 0:
                 # Measure training speed:
                 torch.cuda.synchronize()
                 end_time = time()
@@ -281,6 +292,38 @@ def main(args):
                 running_loss = 0
                 log_steps = 0
                 start_time = time()
+
+                if rank == 0:
+                    log_loss_dict({"avg_loss": avg_loss}, train_steps)
+            
+            if train_steps % args.sample_every == 0 and train_steps > 0:
+                if rank == 0:
+                    torch.cuda.empty_cache() # reduce memory fragmentation
+
+                    logger.info(f"Start Sampling with {y.shape[0]} samples")
+
+                    n = y.shape[0]
+                    z = torch.randn(n, 4, latent_size, latent_size, device=device)
+
+                    model_kwargs = dict(y=y) # --> param for penalize unconditional output
+
+                    # Sample images:
+                    samples = test_diffusion.p_sample_loop(
+                        ema.forward, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
+                    )
+
+                    images = []
+
+                    for img in samples:
+                        img = vae.decode(img.unsqueeze(0) / 0.18215).sample.detach().cpu()
+                        images.append(img.squeeze())
+                    images = torch.stack(images)
+
+                    log_images(images, args.model.replace("/", "-"), train_steps)
+
+                    logger.info("Sampling Done.")
+                
+                dist.barrier()
 
             # Save DiT checkpoint:
             if train_steps % args.ckpt_every == 0 and train_steps > 0:
@@ -318,6 +361,7 @@ if __name__ == "__main__":
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--log-every", type=int, default=100)
     parser.add_argument("--ckpt-every", type=int, default=50_000)
+    parser.add_argument("--sample-every", type=int, default=10)
     parser.add_argument("--ckpt", type=str, default=None)
     parser.add_argument("--fine-tuning", action="store_true")
     args = parser.parse_args()
