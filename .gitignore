@@ -1,7 +1,8 @@
 __pycache__
-results
+t2i-results
+fastDiT-results
+t2i-samples
 pretrained_models
-samples
 outlog
 wandb
 *.sbatch

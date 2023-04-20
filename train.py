@@ -66,11 +66,22 @@ def update_model_state(model_state, state_dict_path, fine_tuning=False):
 
     for name, param in pretrained_state.items():
         if name not in model_state:
-            continue
+                continue
         elif isinstance(param, torch.nn.parameter.Parameter):
             param = param.data
-        model_state[name].copy_(param)
 
+        if fine_tuning:
+            '''
+                Load all weights but AdaLN; 
+                Freeze all weights but Bias and LayerNorm
+            '''
+            if "adaLN" not in name:
+                model_state[name].copy_(param)
+            if "bias" not in name:
+                model_state[name].requires_grad = False
+        else:
+            model_state[name].copy_(param)
+        
         # if fine_tuning == True and "adaLN_modulation" not in name:
         #     model_state[name].requires_grad = False
     
@@ -176,7 +187,7 @@ def main(args):
     latent_size = args.image_size // 8
     model = DiT_models[args.model](
         input_size=latent_size,
-        num_classes=args.num_classes
+        num_classes=1000
     )
 
     model_state = None
@@ -294,7 +305,7 @@ def main(args):
                 start_time = time()
 
                 if rank == 0:
-                    log_loss_dict({"avg_loss": avg_loss}, train_steps)
+                    log_loss_dict({"Average Loss": avg_loss, "Steps / Sec": steps_per_sec}, train_steps)
             
             if train_steps % args.sample_every == 0 and train_steps > 0:
                 if rank == 0:
@@ -350,7 +361,7 @@ if __name__ == "__main__":
     # Default args here will train DiT-XL/2 with the hyperparameters we used in our paper (except training iters).
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-path", type=str, required=True)
-    parser.add_argument("--results-dir", type=str, default="results")
+    parser.add_argument("--results-dir", type=str, default="t2i-results")
     parser.add_argument("--model", type=str, choices=list(DiT_models.keys()), default="DiT-XL/2")
     parser.add_argument("--image-size", type=int, choices=[256, 512], default=256)
     parser.add_argument("--epochs", type=int, default=1400)

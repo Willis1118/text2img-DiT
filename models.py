@@ -14,6 +14,7 @@ import torch.nn as nn
 import numpy as np
 import math
 from timm.models.vision_transformer import PatchEmbed, Attention, Mlp
+import torch.utils.checkpoint as checkpoint
 
 from transformers import DistilBertTokenizerFast, DistilBertModel
 from einops import rearrange
@@ -282,6 +283,12 @@ class DiT(nn.Module):
         imgs = x.reshape(shape=(x.shape[0], c, h * p, h * p))
         return imgs
 
+    def ckpt_wrapper(self, module):
+        def ckpt_forward(*inputs):
+            outputs = module(*inputs)
+            return outputs
+        return ckpt_forward
+
     def forward(self, x, t, y):
         """
         Forward pass of DiT.
@@ -292,14 +299,13 @@ class DiT(nn.Module):
         # --> patchify images and add positional embedding
         x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
         t = self.t_embedder(t)                   # (N, D)
-        # y = self.y_embedder(y, self.training)    # (N, D)
-        y = self.y_embedder(y)                   # (N, D)
+        y = self.y_embedder(y)    # (N, D)
 
         ########### Add text conditioning here ##########
         c = t + y                                # (N, D)
 
         for block in self.blocks:
-            x = block(x, c)                      # (N, T, D)
+            x = checkpoint.checkpoint(self.ckpt_wrapper(block), x, c)          # (N, T, D)
         x = self.final_layer(x, c)                # (N, T, patch_size ** 2 * out_channels)
         x = self.unpatchify(x)                   # (N, out_channels, H, W)
         return x
