@@ -17,6 +17,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from torchvision.datasets import ImageFolder
 from torchvision import transforms
+from einops import rearrange
 import numpy as np
 from collections import OrderedDict
 from PIL import Image
@@ -26,10 +27,12 @@ from time import time
 import argparse
 import logging
 import os
+from functools import partial
 
 from models import DiT_models
 from diffusion import create_diffusion
 from diffusers.models import AutoencoderKL
+from transformers import DistilBertModel
 from coco import CocoDataset, collate_fn
 from wandb_utils import initialize_wandb, log_loss_dict, log_images
 
@@ -49,6 +52,18 @@ def update_ema(ema_model, model, decay=0.9999):
     for name, param in model_params.items():
         # TODO: Consider applying only to params that require_grad to avoid small numerical changes of pos_embed
         ema_params[name].mul_(decay).add_(param.data, alpha=1 - decay)
+
+@torch.no_grad()
+def text_encoding(caption, encoder, end_token):
+    device = caption.device
+    mask = torch.cumsum((caption == end_token), 1).to(device)
+    mask[caption == end_token] = 0
+    mask = (~mask.bool()).long()
+
+    emb = encoder(caption, attention_mask=mask)['last_hidden_state']
+    
+    emb = rearrange(emb, 'b c h -> b (c h)')
+    return emb
 
 def update_model_state(model_state, state_dict_path, fine_tuning=False):
 
@@ -77,7 +92,7 @@ def update_model_state(model_state, state_dict_path, fine_tuning=False):
             '''
             if "adaLN" not in name:
                 model_state[name].copy_(param)
-            if "bias" not in name:
+            if "bias" not in name or "adaLN" not in name:
                 model_state[name].requires_grad = False
         else:
             model_state[name].copy_(param)
@@ -177,8 +192,10 @@ def main(args):
             "epochs": args.epochs,
             "learning_rate": 1e-4,
             "batch_size": args.global_batch_size,
+            "GPUs": dist.get_world_size(),
+            "checkpoint_path": args.ckpt,
         }
-        initialize_wandb(wandb_configs, exp_name=f"{model_string_name}-{experiment_index}")
+        initialize_wandb(wandb_configs, exp_name=f"{model_string_name}-{experiment_index}-{args.cfg_scale}")
     else:
         logger = create_logger(None)
 
@@ -206,10 +223,11 @@ def main(args):
     # Note that parameter initialization is done within the DiT constructor
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
     requires_grad(ema, False)
-    model = DDP(model.to(device), device_ids=[rank], find_unused_parameters=True)
+    model = DDP(model.to(device), device_ids=[rank], find_unused_parameters=False)
     diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule, MSE loss
     test_diffusion = create_diffusion(str(250)) # for sampling
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
+    encoder = DistilBertModel.from_pretrained("distilbert-base-uncased").to(device)
     logger.info(f"DiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     # Setup optimizer (we used default Adam betas=(0.9, 0.999) and a constant learning rate of 1e-4 in our paper):
@@ -276,8 +294,10 @@ def main(args):
             with torch.no_grad():
                 # Map input images to latent space + normalize latents:
                 x = vae.encode(x).latent_dist.sample().mul_(0.18215)
+            y = text_encoding(y, encoder, 102)
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
-            model_kwargs = dict(y=y) # class conditional
+            model_kwargs = dict(y=y, cfg_scale=args.cfg_scale) # class conditional
+            # loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
             loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
             loss = loss_dict["loss"].mean()
             opt.zero_grad()
@@ -316,13 +336,18 @@ def main(args):
                     n = y.shape[0]
                     z = torch.randn(n, 4, latent_size, latent_size, device=device)
 
-                    model_kwargs = dict(y=y) # --> param for penalize unconditional output
+                    z = torch.cat([z, z], 0)
+                    y_null = torch.zeros_like(y).to(device)
+                    y = torch.cat([y, y_null], 0)
+
+                    model_kwargs = dict(y=y, cfg_scale=args.cfg_scale) # --> param for penalize unconditional output
 
                     # Sample images:
                     samples = test_diffusion.p_sample_loop(
                         ema.forward, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
                     )
 
+                    samples, _ = samples.chunk(2, dim=0)  # Remove null class samples
                     images = []
 
                     for img in samples:
@@ -374,5 +399,6 @@ if __name__ == "__main__":
     parser.add_argument("--sample-every", type=int, default=10_000)
     parser.add_argument("--ckpt", type=str, default=None)
     parser.add_argument("--fine-tuning", action="store_true")
+    parser.add_argument("--cfg-scale", type=float, default=1.5)
     args = parser.parse_args()
     main(args)

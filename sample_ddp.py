@@ -17,10 +17,12 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from torchvision import transforms
+from einops import rearrange
 from models import DiT_models
 from download import find_model
 from diffusion import create_diffusion
 from diffusers.models import AutoencoderKL
+from transformers import DistilBertModel
 from tqdm import tqdm
 import os
 from PIL import Image
@@ -68,6 +70,17 @@ def center_crop_arr(pil_image, image_size):
     crop_x = (arr.shape[1] - image_size) // 2
     return Image.fromarray(arr[crop_y: crop_y + image_size, crop_x: crop_x + image_size])
 
+def text_encoding(caption, encoder, end_token):
+    device = caption.device
+    mask = torch.cumsum((caption == end_token), 1).to(device)
+    mask[caption == end_token] = 0
+    mask = (~mask.bool()).long()
+
+    emb = encoder(caption, attention_mask=mask)['last_hidden_state']
+    
+    emb = rearrange(emb, 'b c h -> b (c h)')
+    return emb
+
 
 def main(args):
     """
@@ -106,10 +119,11 @@ def main(args):
     # Auto-download a pre-trained model or load a custom DiT checkpoint from train.py:
     ckpt_path = args.ckpt or f"DiT-XL-2-{args.image_size}x{args.image_size}.pt"
     state_dict = find_model(ckpt_path)
-    model.load_state_dict(state_dict)
+    model.load_state_dict(state_dict, strict=False)
     model.eval()  # important!
     diffusion = create_diffusion(str(args.num_sampling_steps))
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
+    encoder = DistilBertModel.from_pretrained("distilbert-base-uncased").to(device)
     assert args.cfg_scale >= 1.0, "In almost all cases, cfg_scale be >= 1.0"
     using_cfg = args.cfg_scale > 1.0
 
@@ -170,6 +184,7 @@ def main(args):
 
         _, y = next(iter(loader))
         y = y.to(device)
+        y = text_encoding(y, encoder, 102)
         # y = torch.randint(0, args.num_classes, (n,), device=device)
 
         # Setup classifier-free guidance:

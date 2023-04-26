@@ -82,7 +82,7 @@ def main(args):
     # Auto-download a pre-trained model or load a custom DiT checkpoint from train.py:
     ckpt_path = args.ckpt or f"DiT-XL-2-{args.image_size}x{args.image_size}.pt"
     state_dict = find_model(ckpt_path)
-    model.load_state_dict(state_dict)
+    model.load_state_dict(state_dict, strict=False)
     model.eval()  # important!
     diffusion = create_diffusion(str(args.num_sampling_steps))
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
@@ -125,7 +125,7 @@ def main(args):
 
         # Sample images:
         samples = diffusion.p_sample_loop(
-            model.forward_with_cfg, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
+            model.forward, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
         )
         # samples = diffusion.p_sample_loop(
         #     model.forward, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
@@ -154,6 +154,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, choices=list(DiT_models.keys()), default="DiT-XL/2")
     parser.add_argument("--vae", type=str, choices=["ema", "mse"], default="mse")
+    parser.add_argument("--image-size", type=int, choices=[256, 512], default=256)
     parser.add_argument("--data-path", type=str, required=True)
     parser.add_argument("--save-dir", type=str, default="display_samples")
     parser.add_argument("--num-classes", type=int, default=1000)

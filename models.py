@@ -110,7 +110,7 @@ class TextEmbedder(nn.Module):
         super().__init__()
         
         self.text_emb_size = text_channel_size * 768
-        self.encoder = DistilBertModel.from_pretrained(encoder_config)
+        # self.encoder = DistilBertModel.from_pretrained(encoder_config)
 
         if encoder_config == "distilbert-base-uncased":
             self.end_token = 102
@@ -136,8 +136,9 @@ class TextEmbedder(nn.Module):
         return emb
 
     def forward(self, x):
-        x_emb = self.encoding(x, self.encoder.to(x.device), self.end_token)
-        x_mlp = self.mlp(x_emb)
+        # x_emb = self.encoding(x, self.encoder.to(x.device), self.end_token)
+        # x_mlp = self.mlp(x_emb)
+        x_mlp = self.mlp(x)
 
         return x_mlp
 
@@ -290,6 +291,7 @@ class DiT(nn.Module):
         return ckpt_forward
 
     def forward(self, x, t, y):
+    # def forward_wo_cfg(self, x, t, y):
         """
         Forward pass of DiT.
         x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
@@ -305,18 +307,21 @@ class DiT(nn.Module):
         c = t + y                                # (N, D)
 
         for block in self.blocks:
-            x = block(x,c)                       # (N, T, D)
+            x = checkpoint.checkpoint(self.ckpt_wrapper(block), x, c)                       # (N, T, D)
+            # x = block(x, c)
         x = self.final_layer(x, c)                # (N, T, patch_size ** 2 * out_channels)
         x = self.unpatchify(x)                   # (N, out_channels, H, W)
         return x
 
     def forward_with_cfg(self, x, t, y, cfg_scale):
+    # def forward(self, x, t, y, cfg_scale):
         """
         Forward pass of DiT, but also batches the unconditional forward pass for classifier-free guidance.
         """
         # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
         half = x[: len(x) // 2]
         combined = torch.cat([half, half], dim=0)
+        # model_out = self.forward(combined, t, y)
         model_out = self.forward(combined, t, y)
         # For exact reproducibility reasons, we apply classifier-free guidance on only
         # three channels by default. The standard approach to cfg applies it to all channels.
