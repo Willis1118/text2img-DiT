@@ -54,7 +54,7 @@ def update_ema(ema_model, model, decay=0.9999):
         ema_params[name].mul_(decay).add_(param.data, alpha=1 - decay)
 
 @torch.no_grad()
-def text_encoding(caption, encoder, end_token):
+def text_encoding(caption, encoder, end_token, dropout=None):
     device = caption.device
     mask = torch.cumsum((caption == end_token), 1).to(device)
     mask[caption == end_token] = 0
@@ -63,6 +63,7 @@ def text_encoding(caption, encoder, end_token):
     emb = encoder(caption, attention_mask=mask)['last_hidden_state']
     
     emb = rearrange(emb, 'b c h -> b (c h)')
+
     return emb
 
 def update_model_state(model_state, state_dict_path, fine_tuning=False):
@@ -296,7 +297,7 @@ def main(args):
                 x = vae.encode(x).latent_dist.sample().mul_(0.18215)
             y = text_encoding(y, encoder, 102)
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
-            model_kwargs = dict(y=y, cfg_scale=args.cfg_scale) # class conditional
+            model_kwargs = dict(y=y) # class conditional
             # loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
             loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
             loss = loss_dict["loss"].mean()
@@ -344,7 +345,7 @@ def main(args):
 
                     # Sample images:
                     samples = test_diffusion.p_sample_loop(
-                        ema.forward, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
+                        ema.forward_with_cfg, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
                     )
 
                     samples, _ = samples.chunk(2, dim=0)  # Remove null class samples

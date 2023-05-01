@@ -19,6 +19,7 @@ from diffusion import create_diffusion
 from diffusers.models import AutoencoderKL
 from download import find_model
 from models import DiT_models
+from einops import rearrange
 import argparse
 import os
 
@@ -46,6 +47,17 @@ def ids_to_tokens(tokenizer, cap):
 
         anns.append(ann[1:])
     return anns
+
+def text_encoding(caption, encoder, end_token):
+    device = caption.device
+    mask = torch.cumsum((caption == end_token), 1).to(device)
+    mask[caption == end_token] = 0
+    mask = (~mask.bool()).long()
+
+    emb = encoder(caption, attention_mask=mask)['last_hidden_state']
+    
+    emb = rearrange(emb, 'b c h -> b (c h)')
+    return emb
 
 def main(args):
     # Setup PyTorch:
@@ -86,7 +98,7 @@ def main(args):
     model.eval()  # important!
     diffusion = create_diffusion(str(args.num_sampling_steps))
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
-
+    encoder = DistilBertModel.from_pretrained("distilbert-base-uncased").to(device)
     # Labels to condition the model with (feel free to change):
     # class_labels = [207, 360, 387, 974, 88, 979, 417, 279]
 
@@ -105,9 +117,9 @@ def main(args):
     tokenizer = DistilBertTokenizerFast.from_pretrained('distilbert-base-uncased')
     img_idx = 0
     cap_idx = 0
-    for _ in range(10):
+    for _ in range(args.batch):
         # Create text conditioning
-        img, cap = next(iter(dataloader))
+        _, cap = next(iter(dataloader))
 
         # Create sampling noise:
         # n = len(class_labels)
@@ -115,6 +127,7 @@ def main(args):
         z = torch.randn(n, 4, latent_size, latent_size, device=device)
         # y = torch.tensor(class_labels, device=device)
         y = cap.to(device)
+        y = text_encoding(y, encoder, 102)
 
         # Setup classifier-free guidance:
         z = torch.cat([z, z], 0)
@@ -125,7 +138,7 @@ def main(args):
 
         # Sample images:
         samples = diffusion.p_sample_loop(
-            model.forward, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
+            model.forward_with_cfg, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
         )
         # samples = diffusion.p_sample_loop(
         #     model.forward, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device

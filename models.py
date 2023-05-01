@@ -98,7 +98,7 @@ class LabelEmbedder(nn.Module):
         return embeddings
 
 class TextEmbedder(nn.Module):
-    def __init__(self, hidden_size, encoder_config, text_channel_size=128):
+    def __init__(self, hidden_size, dropout_prob, text_channel_size=128):
         '''
             Defines a Text embedder based on DistilBert
             Inputs:
@@ -110,35 +110,25 @@ class TextEmbedder(nn.Module):
         super().__init__()
         
         self.text_emb_size = text_channel_size * 768
-        # self.encoder = DistilBertModel.from_pretrained(encoder_config)
-
-        if encoder_config == "distilbert-base-uncased":
-            self.end_token = 102
+        self.dropout_prob = dropout_prob
 
         self.mlp = nn.Sequential(
             nn.Linear(self.text_emb_size, hidden_size, bias=True),
             nn.SiLU(),
             nn.Linear(hidden_size, hidden_size, bias=True)
         )
-    
-    @staticmethod
-    def encoding(caption, encoder, end_token):
-        
-        device = caption.device
-        mask = torch.cumsum((caption == end_token), 1).to(device)
-        mask[caption == end_token] = 0
-        mask = (~mask.bool()).long()
 
-        with torch.no_grad():
-            emb = encoder(caption, attention_mask=mask)['last_hidden_state']
-        
-        emb = rearrange(emb, 'b c h -> b (c h)')
-        return emb
+    def forward(self, emb, train):
+        '''
+            drop conditions to enable classifier-free guidance
+        '''
+        use_dropout = self.dropout_prob > 0
 
-    def forward(self, x):
-        # x_emb = self.encoding(x, self.encoder.to(x.device), self.end_token)
-        # x_mlp = self.mlp(x_emb)
-        x_mlp = self.mlp(x)
+        if train and use_dropout:
+            drop_ids = torch.rand(emb.shape[0], device=emb.device) < self.dropout_prob
+            emb[drop_ids == 1] = 0
+
+        x_mlp = self.mlp(emb)
 
         return x_mlp
 
@@ -206,7 +196,7 @@ class DiT(nn.Module):
         depth=28,
         num_heads=16,
         mlp_ratio=4.0,
-        class_dropout_prob=0.1,
+        emb_dropout_prob=0.1,
         num_classes=1000,
         learn_sigma=True,
     ):
@@ -220,7 +210,7 @@ class DiT(nn.Module):
         self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)
         # self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
-        self.y_embedder = TextEmbedder(hidden_size, "distilbert-base-uncased")
+        self.y_embedder = TextEmbedder(hidden_size, emb_dropout_prob)
         num_patches = self.x_embedder.num_patches
         # Will use fixed sin-cos embedding:
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
@@ -291,7 +281,6 @@ class DiT(nn.Module):
         return ckpt_forward
 
     def forward(self, x, t, y):
-    # def forward_wo_cfg(self, x, t, y):
         """
         Forward pass of DiT.
         x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
@@ -301,7 +290,7 @@ class DiT(nn.Module):
         # --> patchify images and add positional embedding
         x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
         t = self.t_embedder(t)                   # (N, D)
-        y = self.y_embedder(y)    # (N, D)
+        y = self.y_embedder(y, self.training)    # (N, D)
 
         ########### Add text conditioning here ##########
         c = t + y                                # (N, D)
@@ -314,7 +303,6 @@ class DiT(nn.Module):
         return x
 
     def forward_with_cfg(self, x, t, y, cfg_scale):
-    # def forward(self, x, t, y, cfg_scale):
         """
         Forward pass of DiT, but also batches the unconditional forward pass for classifier-free guidance.
         """
