@@ -59,6 +59,27 @@ def text_encoding(caption, encoder, end_token):
     emb = rearrange(emb, 'b c h -> b (c h)')
     return emb
 
+def update_model_state(model_state, state_dict_path):
+
+    pretrained_state = torch.load(state_dict_path, map_location=lambda storage, loc: storage)
+    ckpt_steps = 0
+
+    if "ema" in pretrained_state:
+        pretrained_state = pretrained_state["ema"]
+
+    for name, param in pretrained_state.items():
+        if name not in model_state:
+                continue
+        elif isinstance(param, torch.nn.parameter.Parameter):
+            param = param.data
+
+        model_state[name].copy_(param)
+        
+        # if fine_tuning == True and "adaLN_modulation" not in name:
+        #     model_state[name].requires_grad = False
+    
+    return model_state
+
 def main(args):
     # Setup PyTorch:
     torch.manual_seed(args.seed)
@@ -93,8 +114,9 @@ def main(args):
     ).to(device)
     # Auto-download a pre-trained model or load a custom DiT checkpoint from train.py:
     ckpt_path = args.ckpt or f"DiT-XL-2-{args.image_size}x{args.image_size}.pt"
-    state_dict = find_model(ckpt_path)
-    model.load_state_dict(state_dict, strict=False)
+    # state_dict = find_model(ckpt_path)
+    state_dict = update_model_state(model.state_dict(), ckpt_path)
+    model.load_state_dict(state_dict)
     model.eval()  # important!
     diffusion = create_diffusion(str(args.num_sampling_steps))
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)

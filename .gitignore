@@ -10,3 +10,4 @@ wandb
 *.png
 *.pb
 *.txt
+*.sh

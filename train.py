@@ -205,7 +205,8 @@ def main(args):
     latent_size = args.image_size // 8
     model = DiT_models[args.model](
         input_size=latent_size,
-        num_classes=1000
+        num_classes=1000,
+        emb_dropout_prob=0.0,
     )
 
     model_state = None
