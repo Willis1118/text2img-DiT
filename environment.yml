@@ -17,3 +17,4 @@ dependencies:
     - einops
     - pytorch-fid
     - wandb
+    - torch_xlas
