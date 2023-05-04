@@ -4,7 +4,7 @@ channels:
   - nvidia
 dependencies:
   - pip 
-  - python >= 3.8
+  - python
   - pytorch=1.13
   - torchvision
   - pytorch-cuda=11.7
@@ -17,4 +17,4 @@ dependencies:
     - einops
     - pytorch-fid
     - wandb
-    - torch_xlas
+    - torch-xla

@@ -26,6 +26,9 @@ from transformers import DistilBertModel
 from coco import CocoDataset, collate_fn
 from wandb_utils import initialize_wandb, log_loss_dict, log_images
 
+import torch_xla
+import torch_xla.core.xla_model as xm
+
 
 #################################################################################
 #                             Training Helper Functions                         #
@@ -155,40 +158,31 @@ def main(args):
     """
     Trains a new DiT model.
     """
-    assert torch.cuda.is_available(), "Training currently requires at least one GPU."
-
-    # Setup DDP:
-    dist.init_process_group("nccl")
-    assert args.global_batch_size % dist.get_world_size() == 0, f"Batch size must be divisible by world size."
-    rank = dist.get_rank()
-    device = rank % torch.cuda.device_count()
-    seed = args.global_seed * dist.get_world_size() + rank
-    torch.manual_seed(seed)
+    device = xm.xla_device()
+    torch.manual_seed(0)
     torch.cuda.set_device(device)
-    print(f"Starting rank={rank}, seed={seed}, world_size={dist.get_world_size()}.")
+    print(f"Starting on {device}.")
 
     # Setup an experiment folder:
-    if rank == 0:
-        os.makedirs(args.results_dir, exist_ok=True)  # Make results folder (holds all experiment subfolders)
-        experiment_index = len(glob(f"{args.results_dir}/*"))
-        model_string_name = args.model.replace("/", "-")  # e.g., DiT-XL/2 --> DiT-XL-2 (for naming folders)
-        experiment_dir = f"{args.results_dir}/{experiment_index:03d}-{model_string_name}"  # Create an experiment folder
-        checkpoint_dir = f"{experiment_dir}/checkpoints"  # Stores saved model checkpoints
-        os.makedirs(checkpoint_dir, exist_ok=True)
-        logger = create_logger(experiment_dir)
-        logger.info(f"Experiment directory created at {experiment_dir}")
+    
+    os.makedirs(args.results_dir, exist_ok=True)  # Make results folder (holds all experiment subfolders)
+    experiment_index = len(glob(f"{args.results_dir}/*"))
+    model_string_name = args.model.replace("/", "-")  # e.g., DiT-XL/2 --> DiT-XL-2 (for naming folders)
+    experiment_dir = f"{args.results_dir}/{experiment_index:03d}-{model_string_name}"  # Create an experiment folder
+    checkpoint_dir = f"{experiment_dir}/checkpoints"  # Stores saved model checkpoints
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    logger = create_logger(experiment_dir)
+    logger.info(f"Experiment directory created at {experiment_dir}")
 
-        wandb_configs = {
-            "model": model_string_name,
-            "epochs": args.epochs,
-            "learning_rate": 1e-4,
-            "batch_size": args.global_batch_size,
-            "GPUs": dist.get_world_size(),
-            "checkpoint_path": args.ckpt,
-        }
-        initialize_wandb(wandb_configs, exp_name=f"{model_string_name}-{experiment_index}-{args.cfg_scale}")
-    else:
-        logger = create_logger(None)
+    wandb_configs = {
+        "model": model_string_name,
+        "epochs": args.epochs,
+        "learning_rate": 1e-4,
+        "batch_size": args.global_batch_size,
+        "GPUs": dist.get_world_size(),
+        "checkpoint_path": args.ckpt,
+    }
+    initialize_wandb(wandb_configs, exp_name=f"{model_string_name}-{experiment_index}-{args.cfg_scale}")
 
     # Create model:
     assert args.image_size % 8 == 0, "Image size must be divisible by 8 (for the VAE encoder)."
@@ -197,10 +191,9 @@ def main(args):
         input_size=latent_size,
         num_classes=1000,
         emb_dropout_prob=0.0,
-    )
+    ).to(device)
 
     model_state = None
-    opt_state = None
 
     # Load pretrained state
     ckpt_steps = 0 # steps loaded from checkpoint
@@ -215,7 +208,6 @@ def main(args):
     # Note that parameter initialization is done within the DiT constructor
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
     requires_grad(ema, False)
-    model = DDP(model.to(device), device_ids=[rank], find_unused_parameters=False)
     diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule, MSE loss
     test_diffusion = create_diffusion(str(250)) # for sampling
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
@@ -245,22 +237,13 @@ def main(args):
     train_ann_path = os.path.join(args.data_path, 'annotations/captions_train2017.json')
 
     train_dataset = CocoDataset(train_path, train_ann_path, transform=train_transform)
-    train_sampler = DistributedSampler(
-        train_dataset,
-        num_replicas=dist.get_world_size(),
-        rank=rank,
-        shuffle=True,
-        seed=args.global_seed
-    )
+
     train_loader = DataLoader(
         train_dataset,
-        batch_size=int(args.global_batch_size // dist.get_world_size()),
-        shuffle=False,
+        batch_size=args.global_batch_size,
+        shuffle=True,
         collate_fn=collate_fn,
-        sampler=train_sampler,
         num_workers=args.num_workers,
-        pin_memory=True,
-        drop_last=True
     )
 
     logger.info(f"Dataset contains {len(train_dataset):,} images ({args.data_path})")
@@ -278,7 +261,6 @@ def main(args):
 
     logger.info(f"Training for {args.epochs} epochs...")
     for epoch in range(args.epochs):
-        train_sampler.set_epoch(epoch)
         logger.info(f"Beginning epoch {epoch}...")
         for x, y in train_loader:
             x = x.to(device)
@@ -297,75 +279,68 @@ def main(args):
             opt.step()
             update_ema(ema, model.module)
 
+            xm.mark_step()
+
             # Log loss values:
             running_loss += loss.item()
             log_steps += 1
             train_steps += 1
             if train_steps % args.log_every == 0 and train_steps > 0:
                 # Measure training speed:
-                torch.cuda.synchronize()
                 end_time = time()
                 steps_per_sec = log_steps / (end_time - start_time)
                 # Reduce loss history over all processes:
-                avg_loss = torch.tensor(running_loss / log_steps, device=device)
-                dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
-                avg_loss = avg_loss.item() / dist.get_world_size()
+                avg_loss = torch.tensor(running_loss / log_steps, device=device).item()
                 logger.info(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
                 # Reset monitoring variables:
                 running_loss = 0
                 log_steps = 0
                 start_time = time()
 
-                if rank == 0:
-                    log_loss_dict({"Average Loss": avg_loss, "Steps / Sec": steps_per_sec}, train_steps)
+                log_loss_dict({"Average Loss": avg_loss, "Steps / Sec": steps_per_sec}, train_steps)
             
             if train_steps % args.sample_every == 0 and train_steps > 0:
-                if rank == 0:
-                    torch.cuda.empty_cache() # reduce memory fragmentation
+            
+                logger.info(f"Start Sampling with {y.shape[0]} samples")
 
-                    logger.info(f"Start Sampling with {y.shape[0]} samples")
+                n = y.shape[0]
+                z = torch.randn(n, 4, latent_size, latent_size, device=device)
 
-                    n = y.shape[0]
-                    z = torch.randn(n, 4, latent_size, latent_size, device=device)
+                z = torch.cat([z, z], 0)
+                y_null = torch.zeros_like(y).to(device)
+                y = torch.cat([y, y_null], 0)
 
-                    z = torch.cat([z, z], 0)
-                    y_null = torch.zeros_like(y).to(device)
-                    y = torch.cat([y, y_null], 0)
+                model_kwargs = dict(y=y, cfg_scale=args.cfg_scale) # --> param for penalize unconditional output
 
-                    model_kwargs = dict(y=y, cfg_scale=args.cfg_scale) # --> param for penalize unconditional output
+                # Sample images:
+                samples = test_diffusion.p_sample_loop(
+                    ema.forward_with_cfg, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
+                )
 
-                    # Sample images:
-                    samples = test_diffusion.p_sample_loop(
-                        ema.forward_with_cfg, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
-                    )
+                samples, _ = samples.chunk(2, dim=0)  # Remove null class samples
+                images = []
 
-                    samples, _ = samples.chunk(2, dim=0)  # Remove null class samples
-                    images = []
+                for img in samples:
+                    img = vae.decode(img.unsqueeze(0) / 0.18215).sample.detach().cpu()
+                    images.append(img.squeeze())
+                images = torch.stack(images)
 
-                    for img in samples:
-                        img = vae.decode(img.unsqueeze(0) / 0.18215).sample.detach().cpu()
-                        images.append(img.squeeze())
-                    images = torch.stack(images)
+                log_images(images, args.model.replace("/", "-"), train_steps)
 
-                    log_images(images, args.model.replace("/", "-"), train_steps)
-
-                    logger.info("Sampling Done.")
-                
-                dist.barrier()
+                logger.info("Sampling Done.")
 
             # Save DiT checkpoint:
             if train_steps % args.ckpt_every == 0 and train_steps > 0:
-                if rank == 0:
-                    checkpoint = {
-                        "model": model.module.state_dict(),
-                        "ema": ema.state_dict(),
-                        "opt": opt.state_dict(),
-                        "args": args
-                    }
-                    checkpoint_path = f"{checkpoint_dir}/{(train_steps + ckpt_steps):07d}.pt"
-                    torch.save(checkpoint, checkpoint_path)
-                    logger.info(f"Saved checkpoint to {checkpoint_path}")
-                dist.barrier()
+                
+                checkpoint = {
+                    "model": model.module.state_dict(),
+                    "ema": ema.state_dict(),
+                    "opt": opt.state_dict(),
+                    "args": args
+                }
+                checkpoint_path = f"{checkpoint_dir}/{(train_steps + ckpt_steps):07d}.pt"
+                torch.save(checkpoint, checkpoint_path)
+                logger.info(f"Saved checkpoint to {checkpoint_path}")
 
     model.eval()  # important! This disables randomized embedding dropout
     # do any sampling/FID calculation/etc. with ema (or model) in eval mode ...
