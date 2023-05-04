@@ -274,7 +274,7 @@ def main(args):
             opt.zero_grad()
             loss.backward()
             opt.step()
-            update_ema(ema, model.module)
+            update_ema(ema, model)
 
             xm.mark_step()
 
@@ -330,7 +330,7 @@ def main(args):
             if train_steps % args.ckpt_every == 0 and train_steps > 0:
                 
                 checkpoint = {
-                    "model": model.module.state_dict(),
+                    "model": model.state_dict(),
                     "ema": ema.state_dict(),
                     "opt": opt.state_dict(),
                     "args": args
