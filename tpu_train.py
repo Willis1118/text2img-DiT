@@ -160,7 +160,6 @@ def main(args):
     """
     device = xm.xla_device()
     torch.manual_seed(0)
-    torch.cuda.set_device(device)
     print(f"Starting on {device}.")
 
     # Setup an experiment folder:
