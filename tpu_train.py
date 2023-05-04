@@ -179,7 +179,7 @@ def main(args):
         "TPU": device,
         "checkpoint_path": args.ckpt,
     }
-    initialize_wandb(wandb_configs, exp_name=f"{model_string_name}-{experiment_index}-{args.cfg_scale}")
+    # initialize_wandb(wandb_configs, exp_name=f"{model_string_name}-{experiment_index}-{args.cfg_scale}")
 
     # Create model:
     assert args.image_size % 8 == 0, "Image size must be divisible by 8 (for the VAE encoder)."
@@ -294,7 +294,7 @@ def main(args):
                 log_steps = 0
                 start_time = time()
 
-                log_loss_dict({"Average Loss": avg_loss, "Steps / Sec": steps_per_sec}, train_steps)
+                # log_loss_dict({"Average Loss": avg_loss, "Steps / Sec": steps_per_sec}, train_steps)
             
             if train_steps % args.sample_every == 0 and train_steps > 0:
             
@@ -322,7 +322,7 @@ def main(args):
                     images.append(img.squeeze())
                 images = torch.stack(images)
 
-                log_images(images, args.model.replace("/", "-"), train_steps)
+                # log_images(images, args.model.replace("/", "-"), train_steps)
 
                 logger.info("Sampling Done.")
 
