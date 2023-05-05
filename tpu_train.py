@@ -367,5 +367,5 @@ if __name__ == "__main__":
     parser.add_argument("--fine-tuning", action="store_true")
     parser.add_argument("--cfg-scale", type=float, default=1.5)
     args = parser.parse_args()
-    
-    xmp.spawn(main, agrs=(args,))
+
+    xmp.spawn(main, args=(args,))
