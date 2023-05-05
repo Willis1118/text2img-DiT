@@ -272,7 +272,7 @@ def main(args):
     start_time = time()
 
     logger.info(f"Training for {args.epochs} epochs...")
-    xm.master_print(f"Training for {args.epochs} epochs...")
+    print(f"Training for {args.epochs} epochs...")
     for epoch in range(args.epochs):
         logger.info(f"Beginning epoch {epoch}...")
         xm.master_print(f"Beginning epoch {epoch}...")
