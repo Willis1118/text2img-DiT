@@ -167,26 +167,26 @@ def main(args):
     print(f"Starting on {device}.")
 
     # Setup an experiment folder:
-    # if xm.is_master_ordinal():
-    #     os.makedirs(args.results_dir, exist_ok=True)  # Make results folder (holds all experiment subfolders)
-    #     experiment_index = len(glob(f"{args.results_dir}/*"))
-    #     model_string_name = args.model.replace("/", "-")  # e.g., DiT-XL/2 --> DiT-XL-2 (for naming folders)
-    #     experiment_dir = f"{args.results_dir}/{experiment_index:03d}-{model_string_name}"  # Create an experiment folder
-    #     checkpoint_dir = f"{experiment_dir}/checkpoints"  # Stores saved model checkpoints
-    #     os.makedirs(checkpoint_dir, exist_ok=True)
-    #     logger = create_logger(experiment_dir)
-    #     logger.info(f"Experiment directory created at {experiment_dir}")
+    if xm.is_master_ordinal():
+        os.makedirs(args.results_dir, exist_ok=True)  # Make results folder (holds all experiment subfolders)
+        experiment_index = len(glob(f"{args.results_dir}/*"))
+        model_string_name = args.model.replace("/", "-")  # e.g., DiT-XL/2 --> DiT-XL-2 (for naming folders)
+        experiment_dir = f"{args.results_dir}/{experiment_index:03d}-{model_string_name}"  # Create an experiment folder
+        checkpoint_dir = f"{experiment_dir}/checkpoints"  # Stores saved model checkpoints
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        # logger = create_logger(experiment_dir)
+        # logger.info(f"Experiment directory created at {experiment_dir}")
     # else:
     #     logger = create_logger(None)
 
-    # wandb_configs = {
-    #     "model": model_string_name,
-    #     "epochs": args.epochs,
-    #     "learning_rate": 1e-4,
-    #     "batch_size": args.global_batch_size,
-    #     "TPU": device,
-    #     "checkpoint_path": args.ckpt,
-    # }
+    wandb_configs = {
+        "model": model_string_name,
+        "epochs": args.epochs,
+        "learning_rate": 1e-4,
+        "batch_size": args.global_batch_size,
+        "TPU": device,
+        "checkpoint_path": args.ckpt,
+    }
     # initialize_wandb(wandb_configs, exp_name=f"{model_string_name}-{experiment_index}-{args.cfg_scale}")
 
     # Create model:
@@ -199,8 +199,6 @@ def main(args):
     ).to(device)
 
     model_state = None
-
-    print('model initialized', model)
 
     # Load pretrained state
     ckpt_steps = 0 # steps loaded from checkpoint
@@ -224,12 +222,13 @@ def main(args):
     test_diffusion = create_diffusion(str(250)) # for sampling
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
     encoder = DistilBertModel.from_pretrained("distilbert-base-uncased").to(device)
-    logger.info(f"DiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
+    # logger.info(f"DiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
+    xm.master_print(f"DiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     # Setup optimizer (we used default Adam betas=(0.9, 0.999) and a constant learning rate of 1e-4 in our paper):
     opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
 
-    logger.info(f"DiT optimizer: learning rate {1e-4}")
+    # logger.info(f"DiT optimizer: learning rate {1e-4}")
 
     # if opt_state is not None:
     #     opt.load_state_dict(opt_state)
@@ -260,7 +259,8 @@ def main(args):
 
     mp_device_loader = pl.MpDeviceLoader(train_loader, device)
 
-    logger.info(f"Dataset contains {len(train_dataset):,} images ({args.data_path})")
+    # logger.info(f"Dataset contains {len(train_dataset):,} images ({args.data_path})")
+    xm.master_print(f"Dataset contains {len(train_dataset):,} images ({args.data_path})")
 
     # Prepare models for training:
     update_ema(ema, model, decay=0)  # Ensure EMA is initialized with synced weights
@@ -273,10 +273,10 @@ def main(args):
     running_loss = 0
     start_time = time()
 
-    logger.info(f"Training for {args.epochs} epochs...")
-    print(f"Training for {args.epochs} epochs...")
+    # logger.info(f"Training for {args.epochs} epochs...")
+    xm.master_print(f"Training for {args.epochs} epochs...")
     for epoch in range(args.epochs):
-        logger.info(f"Beginning epoch {epoch}...")
+        # logger.info(f"Beginning epoch {epoch}...")
         xm.master_print(f"Beginning epoch {epoch}...")
         for x, y in mp_device_loader:
             x = x.to(device)
@@ -309,7 +309,8 @@ def main(args):
                 steps_per_sec = log_steps / (end_time - start_time)
                 # Reduce loss history over all processes:
                 avg_loss = torch.tensor(running_loss / log_steps, device=device).item()
-                logger.info(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
+                avg_loss = xm.mesh_reduce('training_loss', avg_loss, np.mean)
+                # logger.info(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
                 xm.master_print(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
                 # Reset monitoring variables:
                 running_loss = 0
@@ -321,7 +322,8 @@ def main(args):
             
             if train_steps % args.sample_every == 0 and train_steps > 0 and xm.is_master_ordinal():
             
-                logger.info(f"Start Sampling with {y.shape[0]} samples")
+                # logger.info(f"Start Sampling with {y.shape[0]} samples")
+                xm.master_print(f"Start Sampling with {y.shape[0]} samples")
 
                 n = y.shape[0]
                 z = torch.randn(n, 4, latent_size, latent_size, device=device)
@@ -347,7 +349,8 @@ def main(args):
 
                 # log_images(images, args.model.replace("/", "-"), train_steps)
 
-                logger.info("Sampling Done.")
+                # logger.info("Sampling Done.")
+                xm.master_print("Sampling Done.")
 
             # Save DiT checkpoint:
             if train_steps % args.ckpt_every == 0 and train_steps > 0:
@@ -359,14 +362,16 @@ def main(args):
                         "args": args
                     }
                     checkpoint_path = f"{checkpoint_dir}/{(train_steps + ckpt_steps):07d}.pt"
-                    torch.save(checkpoint, checkpoint_path)
-                    logger.info(f"Saved checkpoint to {checkpoint_path}")
-                xm.wait_device_ops()
+                    # torch.save(checkpoint, checkpoint_path)
+                    xm.save(checkpoint, checkpoint_path)
+                    # logger.info(f"Saved checkpoint to {checkpoint_path}")
+                    xm.master_print(f"Saved checkpoint to {checkpoint_path}")
+                xm.rendezvous('ckpt')
 
     model.eval()  # important! This disables randomized embedding dropout
     # do any sampling/FID calculation/etc. with ema (or model) in eval mode ...
 
-    logger.info("Done!")
+    # logger.info("Done!")
     cleanup()
 
 def _mp_fn(index, args):
