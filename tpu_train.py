@@ -277,6 +277,7 @@ def main(args):
         logger.info(f"Beginning epoch {epoch}...")
         xm.master_print(f"Beginning epoch {epoch}...")
         for x, y in mp_device_loader:
+            print('training with step:', train_steps)
             x = x.to(device)
             y = y.to(device)
             with torch.no_grad():
