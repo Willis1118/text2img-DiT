@@ -287,10 +287,12 @@ def main(args):
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
             model_kwargs = dict(y=y) # class conditional
             # loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
+            print('training with step:', train_steps)
             loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
             loss = loss_dict["loss"].mean()
             opt.zero_grad()
             loss.backward()
+            print('training with step:', train_steps)
             xm.optimizer_step(opt)
             update_ema(ema, model)
 
@@ -298,6 +300,8 @@ def main(args):
             running_loss += loss.item()
             log_steps += 1
             train_steps += 1
+
+            print('training with step:', train_steps)
             if train_steps % args.log_every == 0 and train_steps > 0:
                 # Measure training speed:
                 # Synchornize
