@@ -28,6 +28,8 @@ from wandb_utils import initialize_wandb, log_loss_dict, log_images
 
 import torch_xla
 import torch_xla.core.xla_model as xm
+import torch_xla.distributed.parallel_loader as pl
+import torch_xla.distributed.xla_multiprocessing as xmp
 
 
 #################################################################################
@@ -243,6 +245,8 @@ def main(args):
         num_workers=args.num_workers,
     )
 
+    mp_device_loader = pl.MpDeviceLoader(train_loader, device)
+
     logger.info(f"Dataset contains {len(train_dataset):,} images ({args.data_path})")
 
     # Prepare models for training:
@@ -259,7 +263,7 @@ def main(args):
     logger.info(f"Training for {args.epochs} epochs...")
     for epoch in range(args.epochs):
         logger.info(f"Beginning epoch {epoch}...")
-        for x, y in train_loader:
+        for x, y in mp_device_loader:
             x = x.to(device)
             y = y.to(device)
             with torch.no_grad():
@@ -273,10 +277,8 @@ def main(args):
             loss = loss_dict["loss"].mean()
             opt.zero_grad()
             loss.backward()
-            opt.step()
+            xm.optimizer_step(opt)
             update_ema(ema, model)
-
-            xm.mark_step()
 
             # Log loss values:
             running_loss += loss.item()
@@ -365,4 +367,5 @@ if __name__ == "__main__":
     parser.add_argument("--fine-tuning", action="store_true")
     parser.add_argument("--cfg-scale", type=float, default=1.5)
     args = parser.parse_args()
-    main(args)
+    
+    xmp.spawn(main, agrs=(args,))
