@@ -31,7 +31,7 @@ import torch_xla.core.xla_model as xm
 import torch_xla.distributed.parallel_loader as pl
 import torch_xla.distributed.xla_multiprocessing as xmp
 import dill as pickle
-
+from torch_xla.experimental import pjrt
 
 #################################################################################
 #                             Training Helper Functions                         #
@@ -208,6 +208,11 @@ def main(args):
         model.load_state_dict(model_state)
 
         print("Model Checkpoint loaded successfully")
+    
+    # Initialization is nondeterministic with multiple threads in PjRt.
+    # Synchronize model parameters across replicas manually.
+    if pjrt.using_pjrt():
+        pjrt.broadcast_master_param(model)
 
     # Note that parameter initialization is done within the DiT constructor
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
