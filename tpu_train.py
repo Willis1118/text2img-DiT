@@ -347,6 +347,8 @@ def main(args):
     logger.info("Done!")
     cleanup()
 
+def _mp_fn(index, args):
+    main(args)
 
 if __name__ == "__main__":
     # Default args here will train DiT-XL/2 with the hyperparameters we used in our paper (except training iters).
@@ -368,4 +370,4 @@ if __name__ == "__main__":
     parser.add_argument("--cfg-scale", type=float, default=1.5)
     args = parser.parse_args()
 
-    xmp.spawn(main, args=(args,))
+    xmp.spawn(_mp_fn, args=(args,))
