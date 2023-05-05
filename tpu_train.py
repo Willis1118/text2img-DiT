@@ -30,6 +30,7 @@ import torch_xla
 import torch_xla.core.xla_model as xm
 import torch_xla.distributed.parallel_loader as pl
 import torch_xla.distributed.xla_multiprocessing as xmp
+import torch_xla.debug.profiler as xp
 import dill as pickle
 from torch_xla.experimental import pjrt
 
@@ -298,6 +299,8 @@ def main(args):
             train_steps += 1
             if train_steps % args.log_every == 0 and train_steps > 0:
                 # Measure training speed:
+                # Synchornize
+                xm.wait_device_ops()
                 end_time = time()
                 steps_per_sec = log_steps / (end_time - start_time)
                 # Reduce loss history over all processes:
@@ -354,6 +357,7 @@ def main(args):
                     checkpoint_path = f"{checkpoint_dir}/{(train_steps + ckpt_steps):07d}.pt"
                     torch.save(checkpoint, checkpoint_path)
                     logger.info(f"Saved checkpoint to {checkpoint_path}")
+                xm.wait_device_ops()
 
     model.eval()  # important! This disables randomized embedding dropout
     # do any sampling/FID calculation/etc. with ema (or model) in eval mode ...
