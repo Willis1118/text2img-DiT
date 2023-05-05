@@ -200,6 +200,8 @@ def main(args):
 
     model_state = None
 
+    print('model initialized', model)
+
     # Load pretrained state
     ckpt_steps = 0 # steps loaded from checkpoint
     if args.ckpt is not None:
@@ -277,7 +279,6 @@ def main(args):
         logger.info(f"Beginning epoch {epoch}...")
         xm.master_print(f"Beginning epoch {epoch}...")
         for x, y in mp_device_loader:
-            print('training with step:', train_steps)
             x = x.to(device)
             y = y.to(device)
             with torch.no_grad():
@@ -287,12 +288,11 @@ def main(args):
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
             model_kwargs = dict(y=y) # class conditional
             # loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
-            print('training with step:', train_steps)
+            
             loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
             loss = loss_dict["loss"].mean()
             opt.zero_grad()
             loss.backward()
-            print('training with step:', train_steps)
             xm.optimizer_step(opt)
             update_ema(ema, model)
 
@@ -301,7 +301,6 @@ def main(args):
             log_steps += 1
             train_steps += 1
 
-            print('training with step:', train_steps)
             if train_steps % args.log_every == 0 and train_steps > 0:
                 # Measure training speed:
                 # Synchornize
@@ -311,7 +310,7 @@ def main(args):
                 # Reduce loss history over all processes:
                 avg_loss = torch.tensor(running_loss / log_steps, device=device).item()
                 logger.info(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
-                print(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
+                xm.master_print(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
                 # Reset monitoring variables:
                 running_loss = 0
                 log_steps = 0
