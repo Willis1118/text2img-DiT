@@ -179,14 +179,14 @@ def main(args):
     # else:
     #     logger = create_logger(None)
 
-    wandb_configs = {
-        "model": model_string_name,
-        "epochs": args.epochs,
-        "learning_rate": 1e-4,
-        "batch_size": args.global_batch_size,
-        "TPU": device,
-        "checkpoint_path": args.ckpt,
-    }
+    # wandb_configs = {
+    #     "model": model_string_name,
+    #     "epochs": args.epochs,
+    #     "learning_rate": 1e-4,
+    #     "batch_size": args.global_batch_size,
+    #     "TPU": device,
+    #     "checkpoint_path": args.ckpt,
+    # }
     # initialize_wandb(wandb_configs, exp_name=f"{model_string_name}-{experiment_index}-{args.cfg_scale}")
 
     # Create model:
