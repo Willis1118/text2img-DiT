@@ -167,13 +167,13 @@ def main(args):
     print(f"Starting on {device}.")
 
     # Setup an experiment folder:
-    if xm.is_master_ordinal():
-        os.makedirs(args.results_dir, exist_ok=True)  # Make results folder (holds all experiment subfolders)
-        experiment_index = len(glob(f"{args.results_dir}/*"))
-        model_string_name = args.model.replace("/", "-")  # e.g., DiT-XL/2 --> DiT-XL-2 (for naming folders)
-        experiment_dir = f"{args.results_dir}/{experiment_index:03d}-{model_string_name}"  # Create an experiment folder
-        checkpoint_dir = f"{experiment_dir}/checkpoints"  # Stores saved model checkpoints
-        os.makedirs(checkpoint_dir, exist_ok=True)
+    # if xm.is_master_ordinal():
+    #     os.makedirs(args.results_dir, exist_ok=True)  # Make results folder (holds all experiment subfolders)
+    #     experiment_index = len(glob(f"{args.results_dir}/*"))
+    #     model_string_name = args.model.replace("/", "-")  # e.g., DiT-XL/2 --> DiT-XL-2 (for naming folders)
+    #     experiment_dir = f"{args.results_dir}/{experiment_index:03d}-{model_string_name}"  # Create an experiment folder
+    #     checkpoint_dir = f"{experiment_dir}/checkpoints"  # Stores saved model checkpoints
+    #     os.makedirs(checkpoint_dir, exist_ok=True)
         # logger = create_logger(experiment_dir)
         # logger.info(f"Experiment directory created at {experiment_dir}")
     # else:
