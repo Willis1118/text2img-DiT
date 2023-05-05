@@ -312,6 +312,7 @@ def main(args):
                 log_steps = 0
                 start_time = time()
 
+                # TO_DO
                 # log_loss_dict({"Average Loss": avg_loss, "Steps / Sec": steps_per_sec}, train_steps)
             
             if train_steps % args.sample_every == 0 and train_steps > 0 and xm.is_master_ordinal():
