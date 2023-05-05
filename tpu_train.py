@@ -118,15 +118,17 @@ def create_logger(logging_dir):
     """
     Create a logger that writes to a log file and stdout.
     """
-    
-    logging.basicConfig(
-        level=logging.INFO,
-        format='[\033[34m%(asctime)s\033[0m] %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S',
-        handlers=[logging.StreamHandler(), logging.FileHandler(f"{logging_dir}/log.txt")]
-    )
-    logger = logging.getLogger(__name__)
-    
+    if xm.is_master_ordinal():  # real logger
+        logging.basicConfig(
+            level=logging.INFO,
+            format='[\033[34m%(asctime)s\033[0m] %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S',
+            handlers=[logging.StreamHandler(), logging.FileHandler(f"{logging_dir}/log.txt")]
+        )
+        logger = logging.getLogger(__name__)
+    else:  # dummy logger (does nothing)
+        logger = logging.getLogger(__name__)
+        logger.addHandler(logging.NullHandler())
     return logger
 
 
@@ -164,15 +166,17 @@ def main(args):
     print(f"Starting on {device}.")
 
     # Setup an experiment folder:
-    
-    os.makedirs(args.results_dir, exist_ok=True)  # Make results folder (holds all experiment subfolders)
-    experiment_index = len(glob(f"{args.results_dir}/*"))
-    model_string_name = args.model.replace("/", "-")  # e.g., DiT-XL/2 --> DiT-XL-2 (for naming folders)
-    experiment_dir = f"{args.results_dir}/{experiment_index:03d}-{model_string_name}"  # Create an experiment folder
-    checkpoint_dir = f"{experiment_dir}/checkpoints"  # Stores saved model checkpoints
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    logger = create_logger(experiment_dir)
-    logger.info(f"Experiment directory created at {experiment_dir}")
+    if xm.is_master_ordinal():
+        os.makedirs(args.results_dir, exist_ok=True)  # Make results folder (holds all experiment subfolders)
+        experiment_index = len(glob(f"{args.results_dir}/*"))
+        model_string_name = args.model.replace("/", "-")  # e.g., DiT-XL/2 --> DiT-XL-2 (for naming folders)
+        experiment_dir = f"{args.results_dir}/{experiment_index:03d}-{model_string_name}"  # Create an experiment folder
+        checkpoint_dir = f"{experiment_dir}/checkpoints"  # Stores saved model checkpoints
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        logger = create_logger(experiment_dir)
+        logger.info(f"Experiment directory created at {experiment_dir}")
+    else:
+        logger = create_logger(None)
 
     wandb_configs = {
         "model": model_string_name,
@@ -262,10 +266,10 @@ def main(args):
     start_time = time()
 
     logger.info(f"Training for {args.epochs} epochs...")
-    print(f"Training for {args.epochs} epochs...")
+    xm.master_print(f"Training for {args.epochs} epochs...")
     for epoch in range(args.epochs):
         logger.info(f"Beginning epoch {epoch}...")
-        print(f"Beginning epoch {epoch}...")
+        xm.master_print(f"Beginning epoch {epoch}...")
         for x, y in mp_device_loader:
             x = x.to(device)
             y = y.to(device)
@@ -292,9 +296,10 @@ def main(args):
                 end_time = time()
                 steps_per_sec = log_steps / (end_time - start_time)
                 # Reduce loss history over all processes:
-                avg_loss = torch.tensor(running_loss / log_steps, device=device).item()
+                avg_loss = torch.tensor(running_loss / log_steps, device=device)
+                avg_loss = xm.mesh_reduce('avg_loss', avg_loss.item(), np.mean)
                 logger.info(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
-                print(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
+                xm.master_print(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
                 # Reset monitoring variables:
                 running_loss = 0
                 log_steps = 0
@@ -302,7 +307,7 @@ def main(args):
 
                 # log_loss_dict({"Average Loss": avg_loss, "Steps / Sec": steps_per_sec}, train_steps)
             
-            if train_steps % args.sample_every == 0 and train_steps > 0:
+            if train_steps % args.sample_every == 0 and train_steps > 0 and xm.is_master_ordinal():
             
                 logger.info(f"Start Sampling with {y.shape[0]} samples")
 
@@ -334,16 +339,16 @@ def main(args):
 
             # Save DiT checkpoint:
             if train_steps % args.ckpt_every == 0 and train_steps > 0:
-                
-                checkpoint = {
-                    "model": model.state_dict(),
-                    "ema": ema.state_dict(),
-                    "opt": opt.state_dict(),
-                    "args": args
-                }
-                checkpoint_path = f"{checkpoint_dir}/{(train_steps + ckpt_steps):07d}.pt"
-                torch.save(checkpoint, checkpoint_path)
-                logger.info(f"Saved checkpoint to {checkpoint_path}")
+                if xm.is_master_ordinal():
+                    checkpoint = {
+                        "model": model.state_dict(),
+                        "ema": ema.state_dict(),
+                        "opt": opt.state_dict(),
+                        "args": args
+                    }
+                    checkpoint_path = f"{checkpoint_dir}/{(train_steps + ckpt_steps):07d}.pt"
+                    torch.save(checkpoint, checkpoint_path)
+                    logger.info(f"Saved checkpoint to {checkpoint_path}")
 
     model.eval()  # important! This disables randomized embedding dropout
     # do any sampling/FID calculation/etc. with ema (or model) in eval mode ...
