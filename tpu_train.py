@@ -266,7 +266,7 @@ def main(args):
     )
 
     # logger.info(f"Dataset contains {len(train_dataset):,} images ({args.data_path})")
-    xm.master_print(f"Dataset contains {len(train_dataset):,} images ({args.data_path})")
+    print(f"Dataset contains {len(train_dataset):,} images ({args.data_path})")
 
     # Prepare models for training:
     update_ema(ema, model, decay=0)  # Ensure EMA is initialized with synced weights
