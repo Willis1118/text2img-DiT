@@ -269,8 +269,6 @@ def main(args):
         host_to_device_transfer_threads=1
     )
 
-    xm.rendezvous('finish loading')
-
     # logger.info(f"Dataset contains {len(train_dataset):,} images ({args.data_path})")
     print(f"Dataset contains {len(train_dataset):,} images ({args.data_path})")
 
