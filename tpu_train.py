@@ -237,8 +237,12 @@ def main(args):
     # Setup data:
     assert os.path.isdir(args.data_path), f'Could not find COCO2017 at {args.data_path}'
 
+    def img_augment(data):
+        return center_crop_arr(data, args.image_size)
+
     train_transform = transforms.Compose([
-        transforms.Lambda(lambda pil_image: center_crop_arr(pil_image, args.image_size)),
+        # transforms.Lambda(lambda pil_image: center_crop_arr(pil_image, args.image_size)),
+        img_augment,
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
