@@ -255,6 +255,9 @@ def main(args):
         shuffle=True,
         collate_fn=collate_fn,
         num_workers=args.num_workers,
+        loader_prefetch_size=8,
+        device_prefetch_size=4,
+        host_to_device_transfer_threads=1
     )
 
     mp_device_loader = pl.MpDeviceLoader(train_loader, device)
