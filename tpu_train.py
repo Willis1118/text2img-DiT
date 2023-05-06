@@ -411,4 +411,6 @@ if __name__ == "__main__":
     parser.add_argument("--cfg-scale", type=float, default=1.5)
     args = parser.parse_args()
 
+    os.environ['PJRT_DEVICE'] = 'TPU'
+
     xmp.spawn(_mp_fn, args=(args,))
