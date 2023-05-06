@@ -255,12 +255,15 @@ def main(args):
         shuffle=True,
         collate_fn=collate_fn,
         num_workers=args.num_workers,
+    )
+
+    mp_device_loader = pl.MpDeviceLoader(
+        train_loader,
+        device,
         loader_prefetch_size=8,
         device_prefetch_size=4,
         host_to_device_transfer_threads=1
     )
-
-    mp_device_loader = pl.MpDeviceLoader(train_loader, device)
 
     # logger.info(f"Dataset contains {len(train_dataset):,} images ({args.data_path})")
     xm.master_print(f"Dataset contains {len(train_dataset):,} images ({args.data_path})")
