@@ -375,7 +375,9 @@ def main(args):
     cleanup()
 
 def _mp_fn(index, args):
+    torch.set_default_tensor_type('torch.FloatTensor')
     main(args)
+    sys.exit(21)
 
 if __name__ == "__main__":
     # Default args here will train DiT-XL/2 with the hyperparameters we used in our paper (except training iters).
