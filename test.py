@@ -97,55 +97,55 @@ def main():
 
     print(f"Dataset contains {len(train_dataset):,} images ({data_path})")
     
-    model.train()
+    # model.train()
 
-    # Variables for monitoring/logging purposes:
-    train_steps = 0
-    log_steps = 0
-    running_loss = 0
-    start_time = time()
+    # # Variables for monitoring/logging purposes:
+    # train_steps = 0
+    # log_steps = 0
+    # running_loss = 0
+    # start_time = time()
 
-    xm.master_print(f"Training for 1 epochs...")
+    # xm.master_print(f"Training for 1 epochs...")
 
-    for epoch in range(1):
-        xm.master_print(f"Beginning epoch {epoch}...")
-        for x, y in mp_device_loader:
-            x = x.to(device)
-            y = y.to(device)
-            with torch.no_grad():
-                # Map input images to latent space + normalize latents:
-                x = vae.encode(x).latent_dist.sample().mul_(0.18215)
-            y = text_encoding(y, encoder, 102)
-            t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
-            model_kwargs = dict(y=y) # class conditional
-            # loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
+    # for epoch in range(1):
+    #     xm.master_print(f"Beginning epoch {epoch}...")
+    #     for x, y in mp_device_loader:
+    #         x = x.to(device)
+    #         y = y.to(device)
+    #         with torch.no_grad():
+    #             # Map input images to latent space + normalize latents:
+    #             x = vae.encode(x).latent_dist.sample().mul_(0.18215)
+    #         y = text_encoding(y, encoder, 102)
+    #         t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
+    #         model_kwargs = dict(y=y) # class conditional
+    #         # loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
 
-            loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
-            loss = loss_dict["loss"].mean()
-            opt.zero_grad()
-            loss.backward()
-            xm.optimizer_step(opt)
+    #         loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
+    #         loss = loss_dict["loss"].mean()
+    #         opt.zero_grad()
+    #         loss.backward()
+    #         xm.optimizer_step(opt)
 
-            # Log loss values:
-            running_loss += loss.item()
-            log_steps += 1
-            train_steps += 1
+    #         # Log loss values:
+    #         running_loss += loss.item()
+    #         log_steps += 1
+    #         train_steps += 1
 
-            if train_steps % 10 == 0 and train_steps > 0:
-                # Measure training speed:
-                # Synchornize
-                xm.wait_device_ops()
-                end_time = time()
-                steps_per_sec = log_steps / (end_time - start_time)
-                # Reduce loss history over all processes:
-                avg_loss = torch.tensor(running_loss / log_steps, device=device).item()
-                avg_loss = xm.mesh_reduce('training_loss', avg_loss, np.mean)
-                # logger.info(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
-                xm.master_print(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
-                # Reset monitoring variables:
-                running_loss = 0
-                log_steps = 0
-                start_time = time()
+    #         if train_steps % 10 == 0 and train_steps > 0:
+    #             # Measure training speed:
+    #             # Synchornize
+    #             xm.wait_device_ops()
+    #             end_time = time()
+    #             steps_per_sec = log_steps / (end_time - start_time)
+    #             # Reduce loss history over all processes:
+    #             avg_loss = torch.tensor(running_loss / log_steps, device=device).item()
+    #             avg_loss = xm.mesh_reduce('training_loss', avg_loss, np.mean)
+    #             # logger.info(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
+    #             xm.master_print(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
+    #             # Reset monitoring variables:
+    #             running_loss = 0
+    #             log_steps = 0
+    #             start_time = time()
 
 
 def _mp_fn(index):
@@ -162,4 +162,5 @@ def _train_update(device, step, loss, tracker, epoch, writer):
       summary_writer=writer)
 
 if __name__ == '__main__':
+    os.environ['PJRT_DEVICE'] = 'TPU'
     xmp.spawn(_mp_fn)
