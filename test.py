@@ -151,7 +151,7 @@ def main():
             if train_steps % 10 == 0 and train_steps > 0:
                 # Measure training speed:
                 # Synchornize
-                xm.wait_device_ops()
+                xm.rendezvous('log error')
                 end_time = time()
                 steps_per_sec = log_steps / (end_time - start_time)
                 # Reduce loss history over all processes:
