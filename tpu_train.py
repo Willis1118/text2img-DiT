@@ -264,9 +264,6 @@ def main(args):
     mp_device_loader = pl.MpDeviceLoader(
         train_loader,
         device,
-        loader_prefetch_size=8,
-        device_prefetch_size=4,
-        host_to_device_transfer_threads=1
     )
 
     # logger.info(f"Dataset contains {len(train_dataset):,} images ({args.data_path})")
