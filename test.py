@@ -93,7 +93,7 @@ def main():
         device,
     )
 
-    xm.rendezvous('finish loading')
+    # xm.rendezvous('finish loading')
 
     print(f"Dataset contains {len(train_dataset):,} images ({data_path})")
     
