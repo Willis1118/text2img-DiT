@@ -238,4 +238,4 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     os.environ['PJRT_DEVICE'] = 'TPU'
-    xmp.spawn(_mp_fn, agrs=(args,))
+    xmp.spawn(_mp_fn, args=(args,))
