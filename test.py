@@ -10,6 +10,7 @@ import torch.distributed as dist
 import torch_xla.distributed.xla_multiprocessing as xmp
 import torch_xla.distributed.parallel_loader as pl
 import torch_xla.test.test_utils as test_utils
+from einops import rearrange
 
 import numpy as np
 from time import time
