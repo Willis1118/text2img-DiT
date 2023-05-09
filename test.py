@@ -85,7 +85,7 @@ def create_logger(logging_dir):
         logger.addHandler(logging.NullHandler())
     return logger
 
-def main(args):
+def main(args, vae, encoder):
     device = xm.xla_device()
     torch.manual_seed(42)
     print(f"Starting on {device}.")
@@ -116,11 +116,12 @@ def main(args):
     requires_grad(ema, False)
     diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule, MSE loss
     test_diffusion = create_diffusion(str(250)) # for sampling
-    vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-ema").to(device)
+    vae = vae.to(device)
+    encoder = encoder.to(device)
 
     xm.rendezvous('VAE loaded') # probably need to separate vae and encoder loaded
 
-    # encoder = DistilBertModel.from_pretrained("distilbert-base-uncased").to(device)
+    # 
 
     xm.master_print(f"DiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
@@ -213,9 +214,9 @@ def main(args):
                 start_time = time()
 
 
-def _mp_fn(index, args):
+def _mp_fn(index, args, vae, encoder):
     torch.set_default_tensor_type('torch.FloatTensor')
-    main(args)
+    main(args, vae, encoder)
 
 if __name__ == '__main__':
 
@@ -238,4 +239,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     os.environ['PJRT_DEVICE'] = 'TPU'
-    xmp.spawn(_mp_fn, args=(args,))
+
+    vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-ema")
+    encoder = DistilBertModel.from_pretrained("distilbert-base-uncased")
+    xmp.spawn(_mp_fn, args=(args, vae, encoder, ))
