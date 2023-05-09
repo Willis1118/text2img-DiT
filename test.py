@@ -214,12 +214,12 @@ def main(args, vae, encoder):
                 start_time = time()
 
 
-def _mp_fn(index, args, vae, encoder):
+def _mp_fn(index, args):
     torch.set_default_tensor_type('torch.FloatTensor')
 
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-ema")
     encoder = DistilBertModel.from_pretrained("distilbert-base-uncased")
-    
+
     main(args, vae, encoder)
 
 if __name__ == '__main__':
