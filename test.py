@@ -102,8 +102,6 @@ def main(args, encoder):
     #     logger.info(f"Experiment directory created at {experiment_dir}")
     # else:
     #     logger = create_logger(None)
-    
-    encoder = encoder.to(device)
 
     model = DiT_models[args.model](
         input_size=32,
