@@ -85,7 +85,7 @@ def create_logger(logging_dir):
         logger.addHandler(logging.NullHandler())
     return logger
 
-def main(args, vae, encoder):
+def main(args, encoder):
     device = xm.xla_device()
     torch.manual_seed(42)
     print(f"Starting on {device}.")
@@ -103,6 +103,8 @@ def main(args, vae, encoder):
     # else:
     #     logger = create_logger(None)
     
+    encoder = encoder.to(device)
+
     model = DiT_models[args.model](
         input_size=32,
         num_classes=1000,
@@ -116,9 +118,8 @@ def main(args, vae, encoder):
     requires_grad(ema, False)
     diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule, MSE loss
     test_diffusion = create_diffusion(str(250)) # for sampling
-    vae = vae.to(device)
-    encoder = encoder.to(device)
-
+    vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-ema").to(device)
+    
     xm.rendezvous('VAE loaded') # probably need to separate vae and encoder loaded
 
     # 
@@ -217,10 +218,9 @@ def main(args, vae, encoder):
 def _mp_fn(index, args):
     torch.set_default_tensor_type('torch.FloatTensor')
 
-    vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-ema")
     encoder = DistilBertModel.from_pretrained("distilbert-base-uncased")
 
-    main(args, vae, encoder)
+    main(args, encoder)
 
 if __name__ == '__main__':
 
