@@ -176,11 +176,11 @@ def main(args, encoder):
         xm.master_print(f"Beginning epoch {epoch}...")
         for x, y in mp_device_loader:
             x = x.to(device)
-            y = y.to(device)
+            y = y
             with torch.no_grad():
                 # Map input images to latent space + normalize latents:
                 x = vae.encode(x).latent_dist.sample().mul_(0.18215)
-            y = text_encoding(y, encoder, 102)
+            y = text_encoding(y, encoder, 102).to(device)
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
             model_kwargs = dict(y=y) # class conditional
             # loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
@@ -214,6 +214,8 @@ def main(args, encoder):
 
 
 def _mp_fn(index, args):
+    torch.set_default_tensor_type('torch.FloatTensor')
+
     encoder = DistilBertModel.from_pretrained("distilbert-base-uncased")
 
     main(args, encoder)
