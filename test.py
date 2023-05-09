@@ -120,7 +120,7 @@ def main(args):
 
     xm.rendezvous('VAE loaded') # probably need to separate vae and encoder loaded
 
-    encoder = DistilBertModel.from_pretrained("distilbert-base-uncased").to(device)
+    # encoder = DistilBertModel.from_pretrained("distilbert-base-uncased").to(device)
 
     xm.master_print(f"DiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
