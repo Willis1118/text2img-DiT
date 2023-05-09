@@ -216,6 +216,10 @@ def main(args, vae, encoder):
 
 def _mp_fn(index, args, vae, encoder):
     torch.set_default_tensor_type('torch.FloatTensor')
+
+    vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-ema")
+    encoder = DistilBertModel.from_pretrained("distilbert-base-uncased")
+    
     main(args, vae, encoder)
 
 if __name__ == '__main__':
@@ -240,6 +244,4 @@ if __name__ == '__main__':
 
     os.environ['PJRT_DEVICE'] = 'TPU'
 
-    vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-ema")
-    encoder = DistilBertModel.from_pretrained("distilbert-base-uncased")
-    xmp.spawn(_mp_fn, args=(args, vae, encoder, ))
+    xmp.spawn(_mp_fn, args=(args, ))
