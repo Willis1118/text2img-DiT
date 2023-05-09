@@ -116,6 +116,7 @@ def main(args, encoder):
     requires_grad(ema, False)
     diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule, MSE loss
     test_diffusion = create_diffusion(str(250)) # for sampling
+    encoder = encoder.to(device)
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-ema").to(device)
     
     xm.rendezvous('VAE loaded') # probably need to separate vae and encoder loaded
@@ -176,11 +177,11 @@ def main(args, encoder):
         xm.master_print(f"Beginning epoch {epoch}...")
         for x, y in mp_device_loader:
             x = x.to(device)
-            y = y
+            y = y.to(device)
             with torch.no_grad():
                 # Map input images to latent space + normalize latents:
                 x = vae.encode(x).latent_dist.sample().mul_(0.18215)
-            y = text_encoding(y, encoder, 102).to(device)
+            y = text_encoding(y, encoder, 102)
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
             model_kwargs = dict(y=y) # class conditional
             # loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
