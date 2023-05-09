@@ -95,7 +95,7 @@ def main():
 
     # xm.rendezvous('finish loading')
 
-    print(f"Dataset contains {len(train_dataset):,} images ({data_path})")
+    print(f"On {xm.get_local_ordinal()}, Dataset contains {len(train_dataset):,} images ({data_path})")
     
     # model.train()
 
