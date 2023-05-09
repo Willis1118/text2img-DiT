@@ -214,8 +214,6 @@ def main(args, encoder):
 
 
 def _mp_fn(index, args):
-    torch.set_default_tensor_type('torch.FloatTensor')
-
     encoder = DistilBertModel.from_pretrained("distilbert-base-uncased")
 
     main(args, encoder)
