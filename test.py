@@ -56,7 +56,10 @@ def main():
     diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule, MSE loss
     test_diffusion = create_diffusion(str(250)) # for sampling
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-ema").to(device)
-    # encoder = DistilBertModel.from_pretrained("distilbert-base-uncased").to(device)
+
+    xm.rendezvou('VAE loaded')
+
+    encoder = DistilBertModel.from_pretrained("distilbert-base-uncased").to(device)
 
     xm.master_print(f"DiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
