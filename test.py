@@ -57,7 +57,7 @@ def main():
     test_diffusion = create_diffusion(str(250)) # for sampling
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-ema").to(device)
 
-    xm.rendezvou('VAE loaded')
+    xm.rendezvous('VAE loaded')
 
     encoder = DistilBertModel.from_pretrained("distilbert-base-uncased").to(device)
 
