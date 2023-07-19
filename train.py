@@ -206,7 +206,7 @@ def main(args):
     model = DiT_models[args.model](
         input_size=latent_size,
         num_classes=1000,
-        emb_dropout_prob=0.0,
+        emb_dropout_prob=0.1,
     )
 
     model_state = None

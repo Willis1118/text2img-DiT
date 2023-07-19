@@ -5,7 +5,7 @@ t2i-samples
 pretrained_models
 outlog
 wandb
-*.sbatch
+archived
 *.out
 *.png
 *.pb
